@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF333333">
+
+    <!-- Remote video (full screen, Phase 3) -->
+    <SurfaceView
+        android:id="@+id/svRemoteVideo"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Local video preview (small, Phase 3) -->
+    <SurfaceView
+        android:id="@+id/svLocalVideo"
+        android:layout_width="120dp"
+        android:layout_height="160dp"
+        android:visibility="gone"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_margin="16dp" />
+
+    <!-- Call info overlay -->
+    <LinearLayout
+        android:id="@+id/layoutCallInfo"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="120dp">
+
+        <TextView
+            android:id="@+id/tvRemoteUser"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="28sp"
+            android:textStyle="bold"
+            android:textColor="@color/white" />
+
+        <TextView
+            android:id="@+id/tvCallType"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="14sp"
+            android:textColor="@color/gray"
+            android:layout_marginTop="4dp" />
+
+        <TextView
+            android:id="@+id/tvCallStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="16sp"
+            android:textColor="@color/white"
+            android:layout_marginTop="24dp" />
+
+        <TextView
+            android:id="@+id/tvTimer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textSize="40sp"
+            android:textStyle="bold"
+            android:textColor="@color/white"
+            android:visibility="gone"
+            android:layout_marginTop="16dp" />
+    </LinearLayout>
+
+    <!-- Bottom buttons -->
+    <LinearLayout
+        android:id="@+id/layoutButtons"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginBottom="64dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnMute"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="静音"
+            android:enabled="false"
+            android:layout_marginEnd="16dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnToggleVideo"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="关闭视频"
+            android:enabled="false"
+            android:visibility="gone"
+            android:layout_marginEnd="16dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnHangup"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="挂断"
+            android:backgroundTint="@color/red"
+            app:iconTint="@color/white" />
+
+        <!-- Accept button for incoming calls -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnAccept"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="接听"
+            android:backgroundTint="@color/green"
+            android:visibility="gone"
+            android:layout_marginStart="16dp" />
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

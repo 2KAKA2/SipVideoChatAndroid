@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingStart="4dp"
+    android:paddingTop="6dp"
+    android:paddingEnd="4dp"
+    android:paddingBottom="6dp">
+
+    <LinearLayout
+        android:id="@+id/layoutSelf"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvTimeSelf"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:layout_marginBottom="4dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
+
+        <LinearLayout
+            android:id="@+id/layoutMediaSelf"
+            android:layout_width="240dp"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bubble_self"
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/ivMediaSelf"
+                android:layout_width="match_parent"
+                android:layout_height="170dp"
+                android:adjustViewBounds="true"
+                android:background="@color/gray_light"
+                android:contentDescription="媒体预览"
+                android:scaleType="centerCrop" />
+
+            <TextView
+                android:id="@+id/tvMediaCaptionSelf"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvMessageSelf"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bubble_self"
+            android:maxWidth="280dp"
+            android:paddingStart="14dp"
+            android:paddingTop="11dp"
+            android:paddingEnd="14dp"
+            android:paddingBottom="11dp"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/layoutOther"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="start"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tvSenderName"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="2dp"
+            android:textColor="@color/primary_dark"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvTimeOther"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp" />
+
+        <LinearLayout
+            android:id="@+id/layoutMediaOther"
+            android:layout_width="240dp"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bubble_other"
+            android:orientation="vertical"
+            android:padding="8dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/ivMediaOther"
+                android:layout_width="match_parent"
+                android:layout_height="170dp"
+                android:adjustViewBounds="true"
+                android:background="@color/gray_light"
+                android:contentDescription="媒体预览"
+                android:scaleType="centerCrop" />
+
+            <TextView
+                android:id="@+id/tvMediaCaptionOther"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvMessageOther"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bubble_other"
+            android:maxWidth="280dp"
+            android:paddingStart="14dp"
+            android:paddingTop="11dp"
+            android:paddingEnd="14dp"
+            android:paddingBottom="11dp"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+</FrameLayout>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#2B63F6</color>
+    <color name="primary_dark">#1742B8</color>
+    <color name="primary_container">#DCE7FF</color>
+    <color name="accent">#FF8E3C</color>
+    <color name="accent_soft">#FFF0E3</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="gray_light">#F3F6FC</color>
+    <color name="gray">#7C8AA5</color>
+    <color name="gray_dark">#3C4A68</color>
+    <color name="red">#E05252</color>
+    <color name="green">#25B56E</color>
+    <color name="bubble_self">#DBE8FF</color>
+    <color name="bubble_other">#FFFFFF</color>
+    <color name="contact_online">#25B56E</color>
+    <color name="contact_offline">#AAB4C8</color>
+    <color name="background">#EEF3FB</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_alt">#E9F0FF</color>
+    <color name="surface_deep">#172033</color>
+    <color name="text_primary">#17233C</color>
+    <color name="text_secondary">#62708D</color>
+    <color name="text_muted">#8D99AF</color>
+    <color name="divider">#D9E1EF</color>
+    <color name="toolbar_start">#285EF3</color>
+    <color name="toolbar_end">#4E85FF</color>
+    <color name="chat_bg_top">#F5F8FF</color>
+    <color name="chat_bg_bottom">#E9F1FF</color>
+</resources>

@@ -1,0 +1,16 @@
+.gradle/
+.gradle-home/
+.idea/
+build/
+*/build/
+local.properties
+*.iml
+captures/
+logs/
+tools/pc-relay/*.log
+tools/pc-relay/*.out
+tools/pc-relay/*.err
+tools/pc-relay/*.class
+tools/pc-relay/relay_test.txt
+sip_config.xml
+*.tmp

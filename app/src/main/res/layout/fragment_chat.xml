@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/chat_background">
+
+    <LinearLayout
+        android:id="@+id/chatTopBar"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginEnd="12dp"
+        android:background="@drawable/contacts_header_bg"
+        android:elevation="6dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="10dp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <ImageButton
+            android:id="@+id/btnBack"
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:background="@drawable/action_chip_bg"
+            android:contentDescription="返回"
+            android:padding="10dp"
+            android:src="@android:drawable/ic_media_previous"
+            android:tint="@color/text_primary" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvChatUser"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_primary"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="支持文字、图片、视频与语音消息"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/btnAudioCall"
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:background="@drawable/action_chip_bg"
+            android:contentDescription="语音通话"
+            android:padding="10dp"
+            android:src="@android:drawable/ic_menu_call"
+            android:tint="@color/text_primary" />
+
+        <ImageButton
+            android:id="@+id/btnVideoCall"
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/action_chip_bg"
+            android:contentDescription="视频通话"
+            android:padding="10dp"
+            android:src="@android:drawable/ic_menu_camera"
+            android:tint="@color/text_primary" />
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvMessages"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:clipToPadding="false"
+        android:paddingStart="12dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="12dp"
+        app:layout_constraintBottom_toTopOf="@id/inputBar"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/chatTopBar" />
+
+    <LinearLayout
+        android:id="@+id/inputBar"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="12dp"
+        android:background="@drawable/composer_bg"
+        android:elevation="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="8dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <ImageButton
+            android:id="@+id/btnImageMessage"
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:background="@drawable/action_chip_bg"
+            android:contentDescription="发送图片"
+            android:padding="10dp"
+            android:src="@android:drawable/ic_menu_gallery"
+            android:tint="@color/text_primary" />
+
+        <ImageButton
+            android:id="@+id/btnVideoMessage"
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/action_chip_bg"
+            android:contentDescription="发送视频"
+            android:padding="10dp"
+            android:src="@android:drawable/ic_menu_slideshow"
+            android:tint="@color/text_primary" />
+
+        <ImageButton
+            android:id="@+id/btnVoiceMessage"
+            android:layout_width="42dp"
+            android:layout_height="42dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/action_chip_bg"
+            android:contentDescription="录制语音消息"
+            android:padding="10dp"
+            android:src="@android:drawable/ic_btn_speak_now"
+            android:tint="@color/text_primary" />
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/etMessage"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:background="@drawable/input_bg"
+            android:hint="输入消息..."
+            android:imeOptions="actionSend"
+            android:inputType="text"
+            android:maxLines="4"
+            android:minHeight="46dp"
+            android:paddingStart="14dp"
+            android:paddingTop="11dp"
+            android:paddingEnd="14dp"
+            android:paddingBottom="11dp"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_muted" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSend"
+            android:layout_width="wrap_content"
+            android:layout_height="44dp"
+            android:layout_marginStart="8dp"
+            android:minWidth="72dp"
+            android:text="发送"
+            android:textStyle="bold"
+            app:cornerRadius="16dp" />
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>

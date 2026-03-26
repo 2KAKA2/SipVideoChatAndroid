@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black">
+
+    <ImageView
+        android:id="@+id/ivPreview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:adjustViewBounds="true"
+        android:contentDescription="图片预览"
+        android:scaleType="fitCenter"
+        android:visibility="gone" />
+
+    <VideoView
+        android:id="@+id/videoPreview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:id="@+id/audioContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="32dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="104dp"
+            android:layout_height="104dp"
+            android:background="@drawable/preview_close_button_bg"
+            android:padding="24dp"
+            android:src="@android:drawable/ic_btn_speak_now"
+            android:tint="@color/white" />
+
+        <TextView
+            android:id="@+id/tvAudioTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:textColor="@color/white"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvAudioSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="语音消息"
+            android:textColor="#B3FFFFFF"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvPreviewTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="28dp"
+        android:maxWidth="240dp"
+        android:ellipsize="end"
+        android:singleLine="true"
+        android:textColor="@color/white"
+        android:textSize="17sp"
+        android:textStyle="bold" />
+
+    <ImageButton
+        android:id="@+id/btnCenterPlay"
+        android:layout_width="76dp"
+        android:layout_height="76dp"
+        android:layout_gravity="center"
+        android:background="@drawable/preview_close_button_bg"
+        android:contentDescription="播放或暂停"
+        android:elevation="4dp"
+        android:padding="18dp"
+        android:src="@android:drawable/ic_media_play"
+        android:tint="@color/white"
+        android:visibility="gone" />
+
+    <ProgressBar
+        android:id="@+id/progressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center" />
+
+    <LinearLayout
+        android:id="@+id/playbackBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#D916233C"
+        android:elevation="10dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="12dp"
+        android:paddingTop="12dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="22dp"
+        android:visibility="gone">
+
+        <ImageButton
+            android:id="@+id/btnPlayPause"
+            android:layout_width="46dp"
+            android:layout_height="46dp"
+            android:background="@drawable/preview_close_button_bg"
+            android:contentDescription="播放或暂停"
+            android:padding="10dp"
+            android:src="@android:drawable/ic_media_play"
+            android:tint="@color/white" />
+
+        <TextView
+            android:id="@+id/tvCurrentTime"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:text="00:00"
+            android:textColor="@color/white"
+            android:textSize="12sp" />
+
+        <SeekBar
+            android:id="@+id/seekBar"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_marginEnd="8dp"
+            android:layout_weight="1"
+            android:max="1000"
+            android:progress="0" />
+
+        <TextView
+            android:id="@+id/tvDuration"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="00:00"
+            android:textColor="@color/white"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvError"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:textColor="@color/white"
+        android:textSize="16sp"
+        android:visibility="gone" />
+
+    <ImageButton
+        android:id="@+id/btnClose"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="top|start"
+        android:layout_margin="16dp"
+        android:background="@drawable/preview_close_button_bg"
+        android:contentDescription="关闭"
+        android:elevation="6dp"
+        android:padding="14dp"
+        android:src="@android:drawable/ic_menu_close_clear_cancel"
+        android:tint="@color/white" />
+
+</FrameLayout>
