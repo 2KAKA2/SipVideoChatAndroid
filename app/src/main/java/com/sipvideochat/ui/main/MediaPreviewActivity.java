@@ -119,7 +119,7 @@ public class MediaPreviewActivity extends AppCompatActivity {
         tvAudioTitle.setText(resolvedTitle);
 
         if (source == null || source.isEmpty()) {
-            showError("无法打开媒体");
+            showError("Unable to open media");
             return;
         }
 
@@ -130,7 +130,7 @@ public class MediaPreviewActivity extends AppCompatActivity {
         } else if (mediaType == Message.MessageType.VOICE) {
             showVoice(source);
         } else {
-            showError("暂不支持该媒体类型");
+            showError("This media type is not supported yet");
         }
     }
 
@@ -138,7 +138,7 @@ public class MediaPreviewActivity extends AppCompatActivity {
         showImageViewOnly();
         MediaPreviewHelper.loadFullImagePreview(this, ivPreview, source,
                 () -> progressBar.setVisibility(View.GONE),
-                () -> showError("图片加载失败"));
+                () -> showError("Failed to load image"));
     }
 
     private void showVideo(String source) {
@@ -159,7 +159,7 @@ public class MediaPreviewActivity extends AppCompatActivity {
                     tvCurrentTime.setText(formatDuration(seekBar.getMax()));
                 });
                 videoPreview.setOnErrorListener((mp, what, extra) -> {
-                    showError("视频加载失败");
+                    showError("Failed to load video");
                     return true;
                 });
                 videoPreview.setOnClickListener(v -> togglePlayback());
@@ -168,14 +168,14 @@ public class MediaPreviewActivity extends AppCompatActivity {
 
             @Override
             public void onFailure(Exception exception) {
-                showError("视频加载失败");
+                showError("Failed to load video");
             }
         });
     }
 
     private void showVoice(String source) {
         showPlaybackLayout(false);
-        tvAudioSubtitle.setText("语音消息");
+        tvAudioSubtitle.setText("Voice message");
         MediaPreviewHelper.preparePreviewSource(this, source, new MediaPreviewHelper.SourceCallback() {
             @Override
             public void onSuccess(String resolvedSource) {
@@ -191,7 +191,7 @@ public class MediaPreviewActivity extends AppCompatActivity {
                         isPrepared = true;
                         progressBar.setVisibility(View.GONE);
                         configurePlaybackDuration(mp.getDuration());
-                        tvAudioSubtitle.setText("点击播放或拖动进度条");
+                        tvAudioSubtitle.setText("Tap play or drag the progress bar");
                         startPlayback();
                     });
                     audioPlayer.setOnCompletionListener(mp -> {
@@ -200,18 +200,18 @@ public class MediaPreviewActivity extends AppCompatActivity {
                         tvCurrentTime.setText(formatDuration(seekBar.getMax()));
                     });
                     audioPlayer.setOnErrorListener((mp, what, extra) -> {
-                        showError("语音加载失败");
+                        showError("Failed to load voice message");
                         return true;
                     });
                     audioPlayer.prepareAsync();
                 } catch (Exception e) {
-                    showError("语音加载失败");
+                    showError("Failed to load voice message");
                 }
             }
 
             @Override
             public void onFailure(Exception exception) {
-                showError("语音加载失败");
+                showError("Failed to load voice message");
             }
         });
     }
@@ -385,13 +385,13 @@ public class MediaPreviewActivity extends AppCompatActivity {
     private String defaultTitleForType(Message.MessageType type) {
         switch (type) {
             case IMAGE:
-                return "图片预览";
+                return "Image Preview";
             case VIDEO:
-                return "视频播放";
+                return "Video Playback";
             case VOICE:
-                return "语音播放";
+                return "Voice Playback";
             default:
-                return "媒体预览";
+                return "Media Preview";
         }
     }
 

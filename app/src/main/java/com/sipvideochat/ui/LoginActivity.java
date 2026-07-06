@@ -21,9 +21,6 @@ import com.sipvideochat.sip.SipEventListener;
 import com.sipvideochat.sip.SipService;
 import com.sipvideochat.ui.main.MainActivity;
 
-/**
- * 登录界面（替代桌面端 LoginFrame）
- */
 public class LoginActivity extends AppCompatActivity {
 
     private TextInputEditText etServerHost, etServerPort, etUsername, etPassword, etLocalSipPort;
@@ -64,7 +61,6 @@ public class LoginActivity extends AppCompatActivity {
         progressBar = findViewById(R.id.progressBar);
         tvStatus = findViewById(R.id.tvStatus);
 
-        // 加载上次保存的配置
         ClientConfig config = new ClientConfig();
         config.load(this);
         if (!config.getUsername().isEmpty()) {
@@ -90,7 +86,7 @@ public class LoginActivity extends AppCompatActivity {
         String localSipPortStr = getText(etLocalSipPort);
 
         if (serverHost.isEmpty() || username.isEmpty()) {
-            Snackbar.make(btnLogin, "请填写服务器地址和用户名", Snackbar.LENGTH_SHORT).show();
+            Snackbar.make(btnLogin, "Please enter the server host and username.", Snackbar.LENGTH_SHORT).show();
             return;
         }
 
@@ -100,11 +96,10 @@ public class LoginActivity extends AppCompatActivity {
             serverPort = Integer.parseInt(serverPortStr);
             localSipPort = Integer.parseInt(localSipPortStr);
         } catch (NumberFormatException e) {
-            Snackbar.make(btnLogin, "端口号格式错误", Snackbar.LENGTH_SHORT).show();
+            Snackbar.make(btnLogin, "Port must be a number.", Snackbar.LENGTH_SHORT).show();
             return;
         }
 
-        // 保存配置
         ClientConfig config = new ClientConfig();
         config.setSipServerHost(serverHost);
         config.setSipServerPort(serverPort);
@@ -115,13 +110,11 @@ public class LoginActivity extends AppCompatActivity {
         config.setLocalIp(ClientConfig.detectLocalIp(this));
         config.save(this);
 
-        // 显示进度
         btnLogin.setEnabled(false);
         progressBar.setVisibility(View.VISIBLE);
         tvStatus.setVisibility(View.VISIBLE);
-        tvStatus.setText("正在连接 SIP 服务器...");
+        tvStatus.setText("Connecting to SIP server...");
 
-        // 启动并绑定SipService
         Intent serviceIntent = new Intent(this, SipService.class);
         startForegroundService(serviceIntent);
         bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE);
@@ -134,8 +127,7 @@ public class LoginActivity extends AppCompatActivity {
         sipService.initSip(config, new SipEventListener() {
             @Override
             public void onRegistered() {
-                tvStatus.setText("注册成功！");
-                // 保存配置并跳转到主界面
+                tvStatus.setText("Registered.");
                 config.save(LoginActivity.this);
 
                 Intent intent = new Intent(LoginActivity.this, MainActivity.class);
@@ -145,10 +137,10 @@ public class LoginActivity extends AppCompatActivity {
 
             @Override
             public void onRegisterFailed(String reason) {
-                tvStatus.setText("注册失败: " + reason);
+                tvStatus.setText("Registration failed: " + reason);
                 btnLogin.setEnabled(true);
                 progressBar.setVisibility(View.GONE);
-                Snackbar.make(btnLogin, "注册失败: " + reason, Snackbar.LENGTH_LONG).show();
+                Snackbar.make(btnLogin, "Registration failed: " + reason, Snackbar.LENGTH_LONG).show();
             }
         });
     }

@@ -14,9 +14,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * RecyclerView adapter for contacts.
- */
 public class ContactAdapter extends RecyclerView.Adapter<ContactAdapter.ViewHolder> {
 
     private List<MainActivity.ConversationItem> contacts;
@@ -52,18 +49,17 @@ public class ContactAdapter extends RecyclerView.Adapter<ContactAdapter.ViewHold
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         MainActivity.ConversationItem item = contacts.get(position);
         String title = item.title == null || item.title.trim().isEmpty() ? item.key : item.title;
-        String avatar = item.group ? "群" : title.substring(0, 1).toUpperCase();
+        String avatar = item.group ? "G" : title.substring(0, 1).toUpperCase();
         holder.tvAvatar.setText(avatar);
         holder.tvContactName.setText(title);
 
         String lastMsg = lastMessages.get(item.key);
         if (lastMsg != null && !lastMsg.isEmpty()) {
             holder.tvLastMessage.setText(lastMsg);
-            holder.tvLastMessage.setVisibility(View.VISIBLE);
         } else {
-            holder.tvLastMessage.setVisibility(View.VISIBLE);
-            holder.tvLastMessage.setText(item.group ? "群聊" : "点击开始聊天");
+            holder.tvLastMessage.setText(item.group ? "Group chat" : "Tap to start chatting");
         }
+        holder.tvLastMessage.setVisibility(View.VISIBLE);
 
         holder.itemView.setOnClickListener(v -> listener.onContactClick(item.key));
         holder.itemView.setOnLongClickListener(v -> {
@@ -99,14 +95,12 @@ public class ContactAdapter extends RecyclerView.Adapter<ContactAdapter.ViewHold
         TextView tvAvatar;
         TextView tvContactName;
         TextView tvLastMessage;
-        TextView tvUnreadBadge;
 
         ViewHolder(@NonNull View itemView) {
             super(itemView);
             tvAvatar = itemView.findViewById(R.id.tvAvatar);
             tvContactName = itemView.findViewById(R.id.tvContactName);
             tvLastMessage = itemView.findViewById(R.id.tvLastMessage);
-            tvUnreadBadge = itemView.findViewById(R.id.tvUnreadBadge);
         }
     }
 }

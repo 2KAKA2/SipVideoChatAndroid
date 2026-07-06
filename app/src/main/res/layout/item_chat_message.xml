@@ -39,7 +39,7 @@
                 android:layout_height="170dp"
                 android:adjustViewBounds="true"
                 android:background="@color/gray_light"
-                android:contentDescription="媒体预览"
+                android:contentDescription="Media preview"
                 android:scaleType="centerCrop" />
 
             <TextView
@@ -105,7 +105,7 @@
                 android:layout_height="170dp"
                 android:adjustViewBounds="true"
                 android:background="@color/gray_light"
-                android:contentDescription="媒体预览"
+                android:contentDescription="Media preview"
                 android:scaleType="centerCrop" />
 
             <TextView

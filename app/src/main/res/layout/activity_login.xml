@@ -47,7 +47,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:gravity="center"
-                android:text="移动端 SIP 多媒体消息与互联测试"
+                android:text="Mobile SIP messaging and call testing"
                 android:textColor="@color/text_secondary"
                 android:textSize="14sp" />
 
@@ -63,7 +63,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="登录到 SIP 服务"
+                    android:text="Sign in to SIP"
                     android:textColor="@color/text_primary"
                     android:textSize="20sp"
                     android:textStyle="bold" />
@@ -72,7 +72,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
-                    android:text="填写服务器和账号信息后即可开始消息互传。"
+                    android:text="Enter the server and account information to start messaging."
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
 
@@ -82,7 +82,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="20dp"
-                    android:hint="SIP 服务器地址"
+                    android:hint="SIP server host"
                     app:boxBackgroundColor="@color/surface"
                     app:boxCornerRadiusBottomEnd="18dp"
                     app:boxCornerRadiusBottomStart="18dp"
@@ -104,7 +104,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:hint="SIP 服务器端口"
+                    android:hint="SIP server port"
                     app:boxBackgroundColor="@color/surface"
                     app:boxCornerRadiusBottomEnd="18dp"
                     app:boxCornerRadiusBottomStart="18dp"
@@ -126,7 +126,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:hint="用户名 / SIP 账号"
+                    android:hint="Username / SIP account"
                     app:boxBackgroundColor="@color/surface"
                     app:boxCornerRadiusBottomEnd="18dp"
                     app:boxCornerRadiusBottomStart="18dp"
@@ -147,7 +147,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:hint="密码"
+                    android:hint="Password"
                     app:boxBackgroundColor="@color/surface"
                     app:boxCornerRadiusBottomEnd="18dp"
                     app:boxCornerRadiusBottomStart="18dp"
@@ -169,7 +169,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:hint="本地 SIP 端口"
+                    android:hint="Local SIP port"
                     app:boxBackgroundColor="@color/surface"
                     app:boxCornerRadiusBottomEnd="18dp"
                     app:boxCornerRadiusBottomStart="18dp"
@@ -190,7 +190,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="56dp"
                     android:layout_marginTop="22dp"
-                    android:text="进入应用"
+                    android:text="Enter app"
                     android:textSize="16sp"
                     android:textStyle="bold"
                     app:cornerRadius="18dp" />

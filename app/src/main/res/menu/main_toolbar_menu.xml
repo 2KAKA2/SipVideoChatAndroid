@@ -5,6 +5,6 @@
     <item
         android:id="@+id/action_admin_dashboard"
         android:icon="@android:drawable/ic_menu_manage"
-        android:title="后台管理"
+        android:title="Admin"
         app:showAsAction="ifRoom" />
 </menu>

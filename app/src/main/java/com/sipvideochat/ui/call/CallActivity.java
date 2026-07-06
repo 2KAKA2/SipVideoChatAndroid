@@ -137,7 +137,7 @@ public class CallActivity extends AppCompatActivity {
     private final SipEventListener sipEventListener = new SipEventListener() {
         @Override
         public void onCallRinging() {
-            runOnUiThread(() -> tvCallStatus.setText("对方振铃中..."));
+            runOnUiThread(() -> tvCallStatus.setText("Remote device is ringing..."));
         }
 
         @Override
@@ -229,14 +229,14 @@ public class CallActivity extends AppCompatActivity {
 
     private void setupUi() {
         tvRemoteUser.setText(remoteUser);
-        tvCallType.setText(videoEnabled ? "视频通话" : "语音通话");
-        tvCallStatus.setText(isOutgoing ? "正在呼叫..." : "来电...");
+        tvCallType.setText(videoEnabled ? "Video Call" : "Voice Call");
+        tvCallStatus.setText(isOutgoing ? "Calling..." : "Incoming call...");
 
         btnAccept.setVisibility(isOutgoing ? View.GONE : View.VISIBLE);
         btnMute.setEnabled(false);
         btnToggleVideo.setVisibility(videoEnabled ? View.VISIBLE : View.GONE);
         btnToggleVideo.setEnabled(false);
-        btnToggleVideo.setText("关闭视频");
+        btnToggleVideo.setText("Stop Video");
 
         svRemoteVideo.setVisibility(videoEnabled ? View.VISIBLE : View.GONE);
         pvLocalVideo.setVisibility(videoEnabled ? View.VISIBLE : View.GONE);
@@ -315,7 +315,7 @@ public class CallActivity extends AppCompatActivity {
 
         permissionsGranted = allGranted;
         if (!allGranted) {
-            Toast.makeText(this, "通话所需权限未授权", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Call permissions were not granted.", Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
@@ -327,7 +327,7 @@ public class CallActivity extends AppCompatActivity {
             return;
         }
         outgoingVideoInviteStarted = true;
-        tvCallStatus.setText("正在准备视频...");
+        tvCallStatus.setText("Preparing video...");
 
         Log.i(TAG, "acceptCall remoteSdpLength=" + (remoteSdp == null ? 0 : remoteSdp.length())
                 + ", hasAudio=" + (remoteSdp != null && remoteSdp.contains("m=audio"))
@@ -344,10 +344,10 @@ public class CallActivity extends AppCompatActivity {
                     runOnUiThread(() -> {
                         mediaStarted = true;
                         videoSending = true;
-                        btnToggleVideo.setText("关闭视频");
+                        btnToggleVideo.setText("Stop Video");
                         DiagnosticLog.i(TAG, "outgoing video offer ready, sdpLength=" + (sdp == null ? 0 : sdp.length()));
                         sipService.makeCall(remoteUser, true, sdp);
-                        tvCallStatus.setText("正在呼叫...");
+                        tvCallStatus.setText("Calling...");
                     });
                 }
 
@@ -384,7 +384,7 @@ public class CallActivity extends AppCompatActivity {
         }
 
         btnAccept.setVisibility(View.GONE);
-        tvCallStatus.setText("正在接听...");
+        tvCallStatus.setText("Answering...");
 
         if (!videoEnabled) {
             if (remoteSdp != null && !remoteSdp.isEmpty()) {
@@ -396,7 +396,7 @@ public class CallActivity extends AppCompatActivity {
         }
 
         if (remoteSdp == null || remoteSdp.trim().isEmpty()) {
-            onFailed("对端视频 SDP 缺失");
+            onFailed("Remote video SDP is missing");
             return;
         }
 
@@ -418,7 +418,7 @@ public class CallActivity extends AppCompatActivity {
                     runOnUiThread(() -> {
                         mediaStarted = true;
                         videoSending = true;
-                        btnToggleVideo.setText("关闭视频");
+                        btnToggleVideo.setText("Stop Video");
                         DiagnosticLog.i(TAG, "incoming video answer ready, sdpLength=" + (sdp == null ? 0 : sdp.length()));
                         sipService.answerCall(pendingInvite, true, sdp);
                     });
@@ -452,7 +452,7 @@ public class CallActivity extends AppCompatActivity {
                 parseRemoteMediaSdp(sdp);
             }
             connected = true;
-            tvCallStatus.setText("通话中");
+            tvCallStatus.setText("In call");
             tvTimer.setVisibility(View.VISIBLE);
             btnMute.setEnabled(true);
             startTimer();
@@ -484,7 +484,7 @@ public class CallActivity extends AppCompatActivity {
         }
 
         connected = true;
-        tvCallStatus.setText("通话中");
+        tvCallStatus.setText("In call");
         tvTimer.setVisibility(View.VISIBLE);
         btnMute.setEnabled(true);
         btnToggleVideo.setEnabled(true);
@@ -509,11 +509,11 @@ public class CallActivity extends AppCompatActivity {
 
         ClientConfig config = sipService.getConfig();
         if (config == null) {
-            onFailed("SIP 配置不可用");
+            onFailed("SIP config is unavailable");
             return;
         }
         if (remoteIp == null || remoteIp.isEmpty() || remoteAudioPort <= 0) {
-            onFailed("未获取到对端媒体地址");
+            onFailed("Remote media address is unavailable");
             return;
         }
 
@@ -566,11 +566,11 @@ public class CallActivity extends AppCompatActivity {
 
         ClientConfig config = sipService.getConfig();
         if (config == null) {
-            onFailed("SIP 配置不可用");
+            onFailed("SIP config is unavailable");
             return;
         }
         if (remoteIp == null || remoteIp.isEmpty() || remoteAudioPort <= 0 || remoteVideoPort <= 0) {
-            onFailed("未获取到对端视频媒体地址");
+            onFailed("Remote video media address is unavailable");
             return;
         }
 
@@ -722,7 +722,7 @@ public class CallActivity extends AppCompatActivity {
                 + ", legacyMode=" + legacyVideoMode);
         persistCallRecord("completed");
         connected = false;
-        tvCallStatus.setText("通话已结束");
+        tvCallStatus.setText("Call ended");
         stopTimer();
         stopMedia("call ended");
         new Handler(Looper.getMainLooper()).postDelayed(this::finish, 1200L);
@@ -734,8 +734,8 @@ public class CallActivity extends AppCompatActivity {
                 + ", connected=" + connected
                 + ", mediaStarted=" + mediaStarted
                 + ", legacyMode=" + legacyVideoMode);
-        tvCallStatus.setText("通话失败: " + (reason == null ? "未知错误" : reason));
-        btnHangup.setText("关闭");
+        tvCallStatus.setText("Call failed: " + (reason == null ? "Unknown error" : reason));
+        btnHangup.setText("Close");
         stopMedia("call failed: " + (reason == null ? "unknown" : reason));
     }
 
@@ -873,7 +873,7 @@ public class CallActivity extends AppCompatActivity {
 
     private void toggleMute() {
         muted = !muted;
-        btnMute.setText(muted ? "取消静音" : "静音");
+        btnMute.setText(muted ? "Unmute" : "Mute");
         if (videoEnabled && webRtcVideoSession != null) {
             webRtcVideoSession.setMuted(muted);
         }
@@ -893,7 +893,7 @@ public class CallActivity extends AppCompatActivity {
         } else if (webRtcVideoSession != null) {
             webRtcVideoSession.setVideoEnabled(videoSending);
         }
-        btnToggleVideo.setText(videoSending ? "关闭视频" : "打开视频");
+        btnToggleVideo.setText(videoSending ? "Stop Video" : "Start Video");
     }
 
     private void startTimer() {

@@ -20,9 +20,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * Android admin dashboard for local message and call statistics.
- */
 public class AdminDashboardActivity extends AppCompatActivity {
     private final SimpleDateFormat dateTimeFormat =
             new SimpleDateFormat("MM-dd HH:mm", Locale.getDefault());
@@ -73,8 +70,8 @@ public class AdminDashboardActivity extends AppCompatActivity {
         config.load(this);
         String username = config.getUsername() == null ? "" : config.getUsername().trim();
         tvAccountSummary.setText(username.isEmpty()
-                ? "当前显示的是这台手机本地保存的统计数据"
-                : "当前账号: " + username + " · 显示这台手机本地保存的统计数据");
+                ? "Showing statistics stored locally on this phone."
+                : "Account: " + username + " - showing statistics stored locally on this phone.");
 
         MessageRepository messageRepository = new MessageRepository(this);
         List<String> keys = messageRepository.getContacts();
@@ -92,8 +89,7 @@ public class AdminDashboardActivity extends AppCompatActivity {
         int video = 0;
 
         for (Message message : allMessages) {
-            boolean isSent = username.equals(message.getSenderId());
-            if (isSent) {
+            if (username.equals(message.getSenderId())) {
                 sent++;
             } else {
                 received++;
@@ -146,7 +142,7 @@ public class AdminDashboardActivity extends AppCompatActivity {
 
     private String buildRecentMessagesText(List<Message> messages, String username) {
         if (messages.isEmpty()) {
-            return "暂无消息记录";
+            return "No messages yet";
         }
 
         StringBuilder sb = new StringBuilder();
@@ -155,11 +151,11 @@ public class AdminDashboardActivity extends AppCompatActivity {
             Message message = messages.get(i);
             boolean isSent = username.equals(message.getSenderId());
             String counterpart = isSent
-                    ? safeText(message.getGroupId() != null ? message.getGroupId() : message.getReceiverId(), "未知对象")
-                    : safeText(message.getSenderId(), "未知对象");
+                    ? safeText(message.getGroupId() != null ? message.getGroupId() : message.getReceiverId(), "Unknown target")
+                    : safeText(message.getSenderId(), "Unknown sender");
             sb.append(dateTimeFormat.format(new Date(message.getTimestamp())))
                     .append("  ")
-                    .append(isSent ? "发送" : "接收")
+                    .append(isSent ? "Sent" : "Received")
                     .append("  ")
                     .append(formatType(message.getType()))
                     .append("  ")
@@ -174,7 +170,7 @@ public class AdminDashboardActivity extends AppCompatActivity {
 
     private String buildRecentCallsText(List<CallLogRecord> callLogs) {
         if (callLogs.isEmpty()) {
-            return "暂无通话记录";
+            return "No calls yet";
         }
 
         StringBuilder sb = new StringBuilder();
@@ -183,15 +179,15 @@ public class AdminDashboardActivity extends AppCompatActivity {
             CallLogRecord log = callLogs.get(i);
             sb.append(dateTimeFormat.format(new Date(log.getStartTime())))
                     .append("  ")
-                    .append(log.isOutgoing() ? "主叫" : "被叫")
+                    .append(log.isOutgoing() ? "Outgoing" : "Incoming")
                     .append("  ")
-                    .append(log.isVideo() ? "视频" : "语音")
+                    .append(log.isVideo() ? "Video" : "Voice")
                     .append("  ")
-                    .append(safeText(log.getRemoteUser(), "未知用户"))
+                    .append(safeText(log.getRemoteUser(), "Unknown user"))
                     .append('\n')
-                    .append("  状态: ")
-                    .append(safeText(log.getStatus(), "未知"))
-                    .append(" · 时长: ")
+                    .append("  Status: ")
+                    .append(safeText(log.getStatus(), "Unknown"))
+                    .append(" - Duration: ")
                     .append(formatDuration(log.getDurationSeconds()))
                     .append("\n\n");
         }
@@ -200,22 +196,22 @@ public class AdminDashboardActivity extends AppCompatActivity {
 
     private String formatType(Message.MessageType type) {
         if (type == null) {
-            return "文本";
+            return "Text";
         }
         switch (type) {
             case IMAGE:
-                return "图片";
+                return "Image";
             case VOICE:
-                return "语音";
+                return "Voice";
             case VIDEO:
-                return "视频";
+                return "Video";
             case FILE:
-                return "文件";
+                return "File";
             case SYSTEM:
-                return "系统";
+                return "System";
             case TEXT:
             default:
-                return "文本";
+                return "Text";
         }
     }
 
@@ -225,17 +221,17 @@ public class AdminDashboardActivity extends AppCompatActivity {
         }
         Message.MessageType type = message.getType();
         if (type == null || type == Message.MessageType.TEXT || type == Message.MessageType.SYSTEM) {
-            return safeText(message.getContent(), "(空文本)");
+            return safeText(message.getContent(), "(empty text)");
         }
         switch (type) {
             case IMAGE:
-                return "[图片] " + safeText(message.getFileName(), "未命名图片");
+                return "[Image] " + safeText(message.getFileName(), "unnamed image");
             case VOICE:
-                return "[语音] " + Math.max(1, message.getDuration()) + " 秒";
+                return "[Voice] " + Math.max(1, message.getDuration()) + "s";
             case VIDEO:
-                return "[视频] " + safeText(message.getFileName(), "未命名视频");
+                return "[Video] " + safeText(message.getFileName(), "unnamed video");
             case FILE:
-                return "[文件] " + safeText(message.getFileName(), "未命名文件");
+                return "[File] " + safeText(message.getFileName(), "unnamed file");
             default:
                 return safeText(message.getContent(), "");
         }

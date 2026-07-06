@@ -29,7 +29,7 @@
             android:layout_width="42dp"
             android:layout_height="42dp"
             android:background="@drawable/action_chip_bg"
-            android:contentDescription="返回"
+            android:contentDescription="Back"
             android:padding="10dp"
             android:src="@android:drawable/ic_media_previous"
             android:tint="@color/text_primary" />
@@ -53,7 +53,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="支持文字、图片、视频与语音消息"
+                android:text="Text, image, video, and voice messages"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
         </LinearLayout>
@@ -63,7 +63,7 @@
             android:layout_width="42dp"
             android:layout_height="42dp"
             android:background="@drawable/action_chip_bg"
-            android:contentDescription="语音通话"
+            android:contentDescription="Voice call"
             android:padding="10dp"
             android:src="@android:drawable/ic_menu_call"
             android:tint="@color/text_primary" />
@@ -74,7 +74,7 @@
             android:layout_height="42dp"
             android:layout_marginStart="8dp"
             android:background="@drawable/action_chip_bg"
-            android:contentDescription="视频通话"
+            android:contentDescription="Video call"
             android:padding="10dp"
             android:src="@android:drawable/ic_menu_camera"
             android:tint="@color/text_primary" />
@@ -118,7 +118,7 @@
             android:layout_width="42dp"
             android:layout_height="42dp"
             android:background="@drawable/action_chip_bg"
-            android:contentDescription="发送图片"
+            android:contentDescription="Send image"
             android:padding="10dp"
             android:src="@android:drawable/ic_menu_gallery"
             android:tint="@color/text_primary" />
@@ -129,7 +129,7 @@
             android:layout_height="42dp"
             android:layout_marginStart="8dp"
             android:background="@drawable/action_chip_bg"
-            android:contentDescription="发送视频"
+            android:contentDescription="Send video"
             android:padding="10dp"
             android:src="@android:drawable/ic_menu_slideshow"
             android:tint="@color/text_primary" />
@@ -140,7 +140,7 @@
             android:layout_height="42dp"
             android:layout_marginStart="8dp"
             android:background="@drawable/action_chip_bg"
-            android:contentDescription="录制语音消息"
+            android:contentDescription="Record voice message"
             android:padding="10dp"
             android:src="@android:drawable/ic_btn_speak_now"
             android:tint="@color/text_primary" />
@@ -152,7 +152,7 @@
             android:layout_marginStart="8dp"
             android:layout_weight="1"
             android:background="@drawable/input_bg"
-            android:hint="输入消息..."
+            android:hint="Type a message..."
             android:imeOptions="actionSend"
             android:inputType="text"
             android:maxLines="4"
@@ -170,7 +170,7 @@
             android:layout_height="44dp"
             android:layout_marginStart="8dp"
             android:minWidth="72dp"
-            android:text="发送"
+            android:text="Send"
             android:textStyle="bold"
             app:cornerRadius="16dp" />
     </LinearLayout>

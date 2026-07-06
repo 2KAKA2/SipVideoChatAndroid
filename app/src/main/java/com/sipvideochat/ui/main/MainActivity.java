@@ -65,6 +65,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final String GROUP_KEY_PREFIX = "group:";
     private static final String CONTACT_REQUEST_PREFIX = "[[CONTACT_REQUEST]]";
+    private static final String CONTACT_ACCEPT_PREFIX = "[[CONTACT_ACCEPT]]";
     private static final String FRIEND_REQUEST_CHANNEL_ID = "friend_request_channel";
 
     private SipService sipService;
@@ -206,6 +207,11 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
+            if (isContactAcceptMessage(body)) {
+                handleIncomingContactAccept(fromUser, body);
+                return;
+            }
+
             if (isContactRequestMessage(body)) {
                 handleIncomingContactRequest(fromUser, body);
                 return;
@@ -316,7 +322,7 @@ public class MainActivity extends AppCompatActivity {
                 + ", sdpLength=" + (callData.sdp == null ? 0 : callData.sdp.length()));
         new MaterialAlertDialogBuilder(this)
                 .setTitle("Incoming call")
-                .setMessage(callData.fromUser + " 闂備緡鍘搁崑鎾绘偣閸ヮ亝鑵圭紓宥嗭耿閺屽懎顫濆畷鍥ㄢ枔")
+                .setMessage(callData.fromUser + " wants to start a call.")
                 .setPositiveButton("Accept", (dialog, which) -> {
                     Intent intent = new Intent(this, CallActivity.class);
                     intent.putExtra("remoteUser", callData.fromUser);
@@ -369,7 +375,7 @@ public class MainActivity extends AppCompatActivity {
             } catch (Exception e) {
                 Log.e(TAG, "Failed to prepare media message", e);
                 runOnUiThread(() -> Toast.makeText(this,
-                        "婵犳鍨辩敮濠勭礊鐎ｎ喖鐭楅柟杈捐吂閸嬫挻鎷呴幖鐐版澀闁? " + friendlyErrorMessage(e), Toast.LENGTH_SHORT).show());
+                        "Failed to prepare media message: " + friendlyErrorMessage(e), Toast.LENGTH_SHORT).show());
             }
         });
     }
@@ -489,8 +495,22 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void addContact(String username) {
-        if (addContactInternal(username, true)) {
-            sendContactRequestReminder(username);
+        String normalized = username == null ? "" : username.trim();
+        if (normalized.isEmpty()) {
+            Toast.makeText(this, "Enter a username first.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (normalized.equals(myUsername)) {
+            Toast.makeText(this, "You cannot add yourself.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        boolean added = addContactInternal(normalized, true);
+        if (added) {
+            appendSystemMessage(normalized, "Contact request pending. Waiting for " + normalized + " to confirm.");
+            sendContactRequestReminder(normalized);
+        } else {
+            Toast.makeText(this, normalized + " is already in your contacts.", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -1006,7 +1026,7 @@ public class MainActivity extends AppCompatActivity {
         }
         String name = group.getName();
         if (name == null || name.trim().isEmpty()) {
-            return "缂傚倸娲㈤崐娑欑?" + group.getMemberCount() + ")";
+            return "Group chat (" + group.getMemberCount() + ")";
         }
         return name;
     }
@@ -1066,7 +1086,7 @@ public class MainActivity extends AppCompatActivity {
         if (group == null) {
             group = new ChatGroup();
             group.setId(roomId.trim());
-            group.setName("缂傚倸娲㈤崐娑欑?" + roomId.substring(0, Math.min(6, roomId.length())));
+            group.setName("Group " + roomId.substring(0, Math.min(6, roomId.length())));
             group.setOwnerId(fromUser);
             group.setMemberIds(new ArrayList<>(Collections.singletonList(fromUser)));
             group.setAdminIds(new ArrayList<>(Collections.singletonList(fromUser)));
@@ -1221,6 +1241,13 @@ public class MainActivity extends AppCompatActivity {
         return body.getMsgContent().startsWith(CONTACT_REQUEST_PREFIX);
     }
 
+    private boolean isContactAcceptMessage(SipMessageBody body) {
+        if (body == null || body.getMsgContent() == null) {
+            return false;
+        }
+        return body.getMsgContent().startsWith(CONTACT_ACCEPT_PREFIX);
+    }
+
     private void handleIncomingContactRequest(String fromUser, SipMessageBody body) {
         addContactInternal(fromUser, true);
 
@@ -1239,11 +1266,19 @@ public class MainActivity extends AppCompatActivity {
         upsertMessage(fromUser, message, MessageEvent.EventType.ADDED, true);
         showFriendRequestNotification(fromUser, message.getContent());
         Toast.makeText(this, message.getContent(), Toast.LENGTH_SHORT).show();
+        sendContactAccepted(fromUser);
+    }
+
+    private void handleIncomingContactAccept(String fromUser, SipMessageBody body) {
+        addContactInternal(fromUser, true);
+        String text = extractContactAcceptText(body.getMsgContent(), fromUser);
+        appendSystemMessage(fromUser, text);
+        Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
     }
 
     private void sendContactRequestReminder(String targetUser) {
         if (sipService == null || !sipService.isSessionReady()) {
-            Toast.makeText(this, "SIP session is not ready. Reminder was not sent.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "SIP session is not ready. Contact request was not sent.", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -1256,12 +1291,44 @@ public class MainActivity extends AppCompatActivity {
         message.setStatus(Message.MessageStatus.SENDING);
         try {
             sipService.sendMessage(targetUser, toSipMessageBody(message, targetUser));
-            Toast.makeText(this, "Contact reminder sent.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Contact request sent to " + targetUser + ".", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Log.e(TAG, "Failed to send contact request reminder", e);
-            Toast.makeText(this, "Contact was added, but the reminder failed to send.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Contact was added locally, but the request failed to send.", Toast.LENGTH_SHORT).show();
         }
     }
+
+    private void sendContactAccepted(String targetUser) {
+        if (sipService == null || !sipService.isSessionReady()) {
+            return;
+        }
+
+        Message message = new Message();
+        message.setSenderId(myUsername);
+        message.setSenderName(myUsername);
+        message.setReceiverId(targetUser);
+        message.setType(Message.MessageType.SYSTEM);
+        message.setContent(CONTACT_ACCEPT_PREFIX + myUsername + " accepted your contact request.");
+        message.setStatus(Message.MessageStatus.SENDING);
+        try {
+            sipService.sendMessage(targetUser, toSipMessageBody(message, targetUser));
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to send contact acceptance", e);
+        }
+    }
+
+    private void appendSystemMessage(String conversationKey, String content) {
+        Message message = new Message();
+        message.setSenderId("System");
+        message.setSenderName("System");
+        message.setReceiverId(myUsername);
+        message.setType(Message.MessageType.SYSTEM);
+        message.setContent(content);
+        message.setTimestamp(System.currentTimeMillis());
+        message.setStatus(Message.MessageStatus.DELIVERED);
+        upsertMessage(conversationKey, message, MessageEvent.EventType.ADDED, true);
+    }
+
     private String extractContactRequestText(String rawContent, String fromUser) {
         if (rawContent == null || rawContent.isEmpty()) {
             return fromUser + " wants to add you as a contact.";
@@ -1269,6 +1336,17 @@ public class MainActivity extends AppCompatActivity {
         if (rawContent.startsWith(CONTACT_REQUEST_PREFIX)) {
             String message = rawContent.substring(CONTACT_REQUEST_PREFIX.length()).trim();
             return message.isEmpty() ? fromUser + " wants to add you as a contact." : message;
+        }
+        return rawContent;
+    }
+
+    private String extractContactAcceptText(String rawContent, String fromUser) {
+        if (rawContent == null || rawContent.isEmpty()) {
+            return fromUser + " accepted your contact request. You are now mutual contacts.";
+        }
+        if (rawContent.startsWith(CONTACT_ACCEPT_PREFIX)) {
+            String message = rawContent.substring(CONTACT_ACCEPT_PREFIX.length()).trim();
+            return message.isEmpty() ? fromUser + " accepted your contact request. You are now mutual contacts." : message;
         }
         return rawContent;
     }

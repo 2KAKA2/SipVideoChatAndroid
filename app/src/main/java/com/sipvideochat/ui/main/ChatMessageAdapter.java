@@ -18,9 +18,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * RecyclerView adapter for chat messages.
- */
 public class ChatMessageAdapter extends RecyclerView.Adapter<ChatMessageAdapter.ViewHolder> {
 
     private final List<Message> messages;
@@ -106,7 +103,7 @@ public class ChatMessageAdapter extends RecyclerView.Adapter<ChatMessageAdapter.
                 MediaPreviewHelper.resolvePreviewSource(message),
                 null,
                 () -> showImageFallback(mediaPreview));
-        mediaCaption.setText(message.getFileName() != null ? message.getFileName() : "点击查看图片");
+        mediaCaption.setText(message.getFileName() != null ? message.getFileName() : "Tap to view image");
     }
 
     private void bindVideoMessage(ImageView mediaPreview, TextView mediaCaption, Message message) {
@@ -118,11 +115,11 @@ public class ChatMessageAdapter extends RecyclerView.Adapter<ChatMessageAdapter.
                 null,
                 () -> showVideoFallback(mediaPreview));
 
-        String fileName = message.getFileName() != null ? message.getFileName() : "视频";
+        String fileName = message.getFileName() != null ? message.getFileName() : "Video";
         if (message.getDuration() > 0) {
-            mediaCaption.setText(fileName + " · " + message.getDuration() + "s\n点击播放视频");
+            mediaCaption.setText(fileName + " - " + message.getDuration() + "s\nTap to play video");
         } else {
-            mediaCaption.setText(fileName + "\n点击播放视频");
+            mediaCaption.setText(fileName + "\nTap to play video");
         }
     }
 
@@ -131,26 +128,26 @@ public class ChatMessageAdapter extends RecyclerView.Adapter<ChatMessageAdapter.
 
         String prefix;
         if (voiceMessagePlayer.isPreparing(message.getId())) {
-            prefix = "…";
+            prefix = "...";
         } else if (voiceMessagePlayer.isPlaying(message.getId())) {
-            prefix = "▮▮";
+            prefix = "||";
         } else {
-            prefix = "▶";
+            prefix = ">";
         }
 
         String actionText;
         if (voiceMessagePlayer.isPreparing(message.getId())) {
-            actionText = "准备播放";
+            actionText = "Preparing";
         } else if (voiceMessagePlayer.isPlaying(message.getId())) {
-            actionText = "点击暂停";
+            actionText = "Tap to pause";
         } else if (voiceMessagePlayer.isPaused(message.getId())) {
-            actionText = "继续播放";
+            actionText = "Tap to resume";
         } else {
-            actionText = "点击播放";
+            actionText = "Tap to play";
         }
 
         String durationText = Math.max(message.getDuration(), 1) + "s";
-        messageView.setText(prefix + " 语音消息  " + durationText + "\n" + actionText);
+        messageView.setText(prefix + " Voice message  " + durationText + "\n" + actionText);
     }
 
     private void showImageFallback(ImageView mediaPreview) {

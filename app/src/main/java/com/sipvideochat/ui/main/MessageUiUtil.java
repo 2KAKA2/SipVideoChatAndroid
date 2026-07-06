@@ -4,9 +4,6 @@ import com.sipvideochat.model.Message;
 
 import java.util.Locale;
 
-/**
- * UI-oriented message formatting helpers.
- */
 public final class MessageUiUtil {
     private MessageUiUtil() {
     }
@@ -18,13 +15,13 @@ public final class MessageUiUtil {
 
         switch (message.getType()) {
             case IMAGE:
-                return "[图片] " + safeName(message);
+                return "[Image] " + safeName(message);
             case VOICE:
-                return String.format(Locale.getDefault(), "[语音] %ds", Math.max(message.getDuration(), 1));
+                return String.format(Locale.getDefault(), "[Voice] %ds", Math.max(message.getDuration(), 1));
             case VIDEO:
-                return String.format(Locale.getDefault(), "[视频] %s", safeName(message));
+                return String.format(Locale.getDefault(), "[Video] %s", safeName(message));
             case FILE:
-                return String.format(Locale.getDefault(), "[文件] %s", safeName(message));
+                return String.format(Locale.getDefault(), "[File] %s", safeName(message));
             case TEXT:
             default:
                 return message.getContent() == null ? "" : message.getContent();
@@ -37,15 +34,15 @@ public final class MessageUiUtil {
         }
         switch (status) {
             case SENDING:
-                return "发送中";
+                return "Sending";
             case SENT:
-                return "已发送";
+                return "Sent";
             case DELIVERED:
-                return "已送达";
+                return "Delivered";
             case READ:
-                return "已读";
+                return "Read";
             case FAILED:
-                return "失败";
+                return "Failed";
             default:
                 return "";
         }
@@ -60,9 +57,9 @@ public final class MessageUiUtil {
             case IMAGE:
                 return detailWithSize(message);
             case VOICE:
-                return String.format(Locale.getDefault(), "语音消息 %ds", Math.max(message.getDuration(), 1));
+                return String.format(Locale.getDefault(), "Voice message %ds", Math.max(message.getDuration(), 1));
             case VIDEO:
-                return String.format(Locale.getDefault(), "视频消息 %s", detailWithSize(message));
+                return String.format(Locale.getDefault(), "Video message %s", detailWithSize(message));
             case FILE:
                 return detailWithSize(message);
             case TEXT:
@@ -74,7 +71,7 @@ public final class MessageUiUtil {
     private static String detailWithSize(Message message) {
         String name = safeName(message);
         if (message.getFileSize() > 0) {
-            return name + " · " + formatFileSize(message.getFileSize());
+            return name + " - " + formatFileSize(message.getFileSize());
         }
         return name;
     }
@@ -86,7 +83,7 @@ public final class MessageUiUtil {
         if (message.getMediaUrl() != null && !message.getMediaUrl().isEmpty()) {
             return message.getMediaUrl();
         }
-        return "媒体文件";
+        return "Media file";
     }
 
     private static String formatFileSize(long bytes) {
