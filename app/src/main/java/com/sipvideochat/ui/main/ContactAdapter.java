@@ -19,17 +19,25 @@ import java.util.Map;
  */
 public class ContactAdapter extends RecyclerView.Adapter<ContactAdapter.ViewHolder> {
 
-    private List<String> contacts;
+    private List<MainActivity.ConversationItem> contacts;
     private final Map<String, String> lastMessages = new HashMap<>();
     private final OnContactClickListener listener;
+    private final OnContactLongClickListener longClickListener;
 
     public interface OnContactClickListener {
-        void onContactClick(String username);
+        void onContactClick(String conversationKey);
     }
 
-    public ContactAdapter(List<String> contacts, OnContactClickListener listener) {
+    public interface OnContactLongClickListener {
+        void onContactLongClick(MainActivity.ConversationItem item);
+    }
+
+    public ContactAdapter(List<MainActivity.ConversationItem> contacts,
+                          OnContactClickListener listener,
+                          OnContactLongClickListener longClickListener) {
         this.contacts = contacts;
         this.listener = listener;
+        this.longClickListener = longClickListener;
     }
 
     @NonNull
@@ -42,19 +50,29 @@ public class ContactAdapter extends RecyclerView.Adapter<ContactAdapter.ViewHold
 
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
-        String username = contacts.get(position);
-        holder.tvAvatar.setText(username.substring(0, 1).toUpperCase());
-        holder.tvContactName.setText(username);
+        MainActivity.ConversationItem item = contacts.get(position);
+        String title = item.title == null || item.title.trim().isEmpty() ? item.key : item.title;
+        String avatar = item.group ? "群" : title.substring(0, 1).toUpperCase();
+        holder.tvAvatar.setText(avatar);
+        holder.tvContactName.setText(title);
 
-        String lastMsg = lastMessages.get(username);
+        String lastMsg = lastMessages.get(item.key);
         if (lastMsg != null && !lastMsg.isEmpty()) {
             holder.tvLastMessage.setText(lastMsg);
             holder.tvLastMessage.setVisibility(View.VISIBLE);
         } else {
-            holder.tvLastMessage.setVisibility(View.GONE);
+            holder.tvLastMessage.setVisibility(View.VISIBLE);
+            holder.tvLastMessage.setText(item.group ? "群聊" : "点击开始聊天");
         }
 
-        holder.itemView.setOnClickListener(v -> listener.onContactClick(username));
+        holder.itemView.setOnClickListener(v -> listener.onContactClick(item.key));
+        holder.itemView.setOnLongClickListener(v -> {
+            if (longClickListener == null) {
+                return false;
+            }
+            longClickListener.onContactLongClick(item);
+            return true;
+        });
     }
 
     @Override
@@ -62,16 +80,18 @@ public class ContactAdapter extends RecyclerView.Adapter<ContactAdapter.ViewHold
         return contacts.size();
     }
 
-    public void updateContacts(List<String> newContacts) {
+    public void updateContacts(List<MainActivity.ConversationItem> newContacts) {
         this.contacts = newContacts;
         notifyDataSetChanged();
     }
 
-    public void updateLastMessage(String username, String message) {
-        lastMessages.put(username, message);
-        int pos = contacts.indexOf(username);
-        if (pos >= 0) {
-            notifyItemChanged(pos);
+    public void updateLastMessage(String conversationKey, String message) {
+        lastMessages.put(conversationKey, message);
+        for (int i = 0; i < contacts.size(); i++) {
+            if (conversationKey.equals(contacts.get(i).key)) {
+                notifyItemChanged(i);
+                return;
+            }
         }
     }
 

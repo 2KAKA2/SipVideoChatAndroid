@@ -23,12 +23,14 @@ public class ClientConfig {
     private int localSipPort = 5061;
     private int localAudioPort = 8000;
     private int localVideoPort = 9000;
+    private String adminServerHost = "";
+    private int adminServerPort = 8090;
     private String username = "";
     private String password = "";
-    private int videoWidth = 320;
-    private int videoHeight = 240;
-    private int videoFrameRate = 25;
-    private int videoBitrate = 500000;
+    private int videoWidth = 240;
+    private int videoHeight = 320;
+    private int videoFrameRate = 12;
+    private int videoBitrate = 300000;
 
     public ClientConfig() {}
 
@@ -43,6 +45,8 @@ public class ClientConfig {
         localSipPort = prefs.getInt("local.sip.port", localSipPort);
         localAudioPort = prefs.getInt("local.audio.port", localAudioPort);
         localVideoPort = prefs.getInt("local.video.port", localVideoPort);
+        adminServerHost = prefs.getString("admin.server.host", adminServerHost);
+        adminServerPort = prefs.getInt("admin.server.port", adminServerPort);
         username = prefs.getString("username", username);
         password = prefs.getString("password", password);
         videoWidth = prefs.getInt("video.width", videoWidth);
@@ -50,9 +54,46 @@ public class ClientConfig {
         videoFrameRate = prefs.getInt("video.framerate", videoFrameRate);
         videoBitrate = prefs.getInt("video.bitrate", videoBitrate);
 
+        boolean migrated = false;
+
+        // Normalize historical video profiles to a WebRTC-friendly portrait profile.
+        if ((videoWidth == 320 && videoHeight == 240)
+                || (videoWidth == 240 && videoHeight == 320)
+                || (videoWidth == 288 && videoHeight == 384)
+                || (videoWidth == 144 && videoHeight == 192)
+                || (videoWidth == 96 && videoHeight == 128)
+                || (videoWidth == 128 && videoHeight == 96)
+                || (videoWidth == 160 && videoHeight == 120)
+                || (videoWidth == 120 && videoHeight == 160)) {
+            videoWidth = 240;
+            videoHeight = 320;
+            migrated = true;
+        }
+        if (videoFrameRate == 25 || videoFrameRate == 15 || videoFrameRate == 12
+                || videoFrameRate == 10 || videoFrameRate == 8
+                || videoFrameRate == 6 || videoFrameRate == 4) {
+            videoFrameRate = 12;
+            migrated = true;
+        }
+        if (videoBitrate == 500000 || videoBitrate == 800000 || videoBitrate == 450000
+                || videoBitrate == 320000 || videoBitrate == 160000 || videoBitrate == 120000
+                || videoBitrate == 96000 || videoBitrate == 80000) {
+            videoBitrate = 300000;
+            migrated = true;
+        }
+
         // 自动检测本机IP
-        if (localIp.isEmpty()) {
-            localIp = detectLocalIp(context);
+        String detectedLocalIp = detectLocalIp(context);
+        if (isUsableLocalIp(detectedLocalIp) && !detectedLocalIp.equals(localIp)) {
+            localIp = detectedLocalIp;
+            migrated = true;
+        } else if (localIp.isEmpty()) {
+            localIp = detectedLocalIp;
+            migrated = true;
+        }
+
+        if (migrated) {
+            save(context);
         }
     }
 
@@ -67,6 +108,8 @@ public class ClientConfig {
         editor.putInt("local.sip.port", localSipPort);
         editor.putInt("local.audio.port", localAudioPort);
         editor.putInt("local.video.port", localVideoPort);
+        editor.putString("admin.server.host", adminServerHost);
+        editor.putInt("admin.server.port", adminServerPort);
         editor.putString("username", username);
         editor.putString("password", password);
         editor.putInt("video.width", videoWidth);
@@ -119,6 +162,10 @@ public class ClientConfig {
         return "0.0.0.0";
     }
 
+    private static boolean isUsableLocalIp(String ip) {
+        return ip != null && !ip.trim().isEmpty() && !"0.0.0.0".equals(ip.trim());
+    }
+
     // ============== Getters and Setters ==============
 
     public String getSipServerHost() { return sipServerHost; }
@@ -139,6 +186,17 @@ public class ClientConfig {
     public int getLocalVideoPort() { return localVideoPort; }
     public void setLocalVideoPort(int localVideoPort) { this.localVideoPort = localVideoPort; }
 
+    public String getAdminServerHost() {
+        if (adminServerHost == null || adminServerHost.trim().isEmpty()) {
+            return sipServerHost;
+        }
+        return adminServerHost;
+    }
+    public void setAdminServerHost(String adminServerHost) { this.adminServerHost = adminServerHost; }
+
+    public int getAdminServerPort() { return adminServerPort; }
+    public void setAdminServerPort(int adminServerPort) { this.adminServerPort = adminServerPort; }
+
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
 
@@ -156,4 +214,13 @@ public class ClientConfig {
 
     public int getVideoBitrate() { return videoBitrate; }
     public void setVideoBitrate(int videoBitrate) { this.videoBitrate = videoBitrate; }
+
+    public boolean isSipConfigured() {
+        return sipServerHost != null
+                && !sipServerHost.trim().isEmpty()
+                && username != null
+                && !username.trim().isEmpty()
+                && localSipPort > 0
+                && sipServerPort > 0;
+    }
 }

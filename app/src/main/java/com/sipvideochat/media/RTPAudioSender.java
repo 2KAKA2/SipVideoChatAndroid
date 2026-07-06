@@ -2,88 +2,78 @@ package com.sipvideochat.media;
 
 import android.util.Log;
 
-import java.net.*;
-import java.nio.ByteBuffer;
+import com.sipvideochat.util.DiagnosticLog;
 
-/**
- * RTP音频发送器
- * (从桌面端 src/media/RTPAudioSender.java 直接移植，纯Java网络)
- */
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.SocketException;
+import java.net.UnknownHostException;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+
 public class RTPAudioSender {
     private static final String TAG = "RTPAudioSender";
 
-    private DatagramSocket socket;
+    private final DatagramSocket socket;
     private InetAddress remoteAddress;
     private int remotePort;
-    private int sequenceNumber = 0;
-    private long timestamp = 0;
-    private int ssrc;
+    private int sequenceNumber;
+    private long timestamp;
+    private final int ssrc;
+    private int sentPackets;
 
     public RTPAudioSender(int localPort) throws SocketException {
         socket = new DatagramSocket(localPort);
         ssrc = (int) (Math.random() * Integer.MAX_VALUE);
-        Log.i(TAG, "RTP发送器已创建，本地端口: " + localPort);
+        Log.i(TAG, "Audio sender ready on port " + localPort);
+        DiagnosticLog.i(TAG, "sender ready localPort=" + localPort);
     }
 
     public void setRemote(String ip, int port) throws UnknownHostException {
-        this.remoteAddress = InetAddress.getByName(ip);
-        this.remotePort = port;
-        Log.i(TAG, "RTP目标设置为: " + ip + ":" + port);
+        remoteAddress = InetAddress.getByName(ip);
+        remotePort = port;
+        Log.i(TAG, "Audio sender remote=" + ip + ":" + port);
+        DiagnosticLog.i(TAG, "sender remote=" + ip + ":" + port);
     }
 
     public void sendAudio(byte[] pcmData, int length) {
-        if (remoteAddress == null) return;
-
+        if (remoteAddress == null || length <= 0) {
+            return;
+        }
         try {
-            byte[] mulawData = PCMUEncoder.encode(pcmData);
-
-            byte[] rtpPacket = buildRTPPacket(mulawData);
-
-            DatagramPacket packet = new DatagramPacket(
-                    rtpPacket, rtpPacket.length, remoteAddress, remotePort
-            );
-
-            socket.send(packet);
-
-            sequenceNumber++;
-            if (sequenceNumber > 65535) {
-                sequenceNumber = 0;
-            }
-
-            // 时间戳增量 = 样本数 (20ms @ 8kHz = 160 samples)
+            byte[] frame = length == pcmData.length ? pcmData : Arrays.copyOf(pcmData, length);
+            byte[] mulawData = PCMUEncoder.encode(frame);
+            byte[] rtpPacket = buildRtpPacket(mulawData);
+            socket.send(new DatagramPacket(rtpPacket, rtpPacket.length, remoteAddress, remotePort));
+            sequenceNumber = (sequenceNumber + 1) & 0xFFFF;
             timestamp += 160;
-
+            sentPackets++;
+            if (sentPackets == 1 || sentPackets % 50 == 0) {
+                DiagnosticLog.i(TAG, "sent packets=" + sentPackets
+                        + ", remote=" + remoteAddress.getHostAddress() + ":" + remotePort
+                        + ", payloadBytes=" + mulawData.length);
+            }
         } catch (Exception e) {
-            Log.e(TAG, "RTP发送失败: " + e.getMessage());
+            Log.e(TAG, "Failed to send RTP audio", e);
+            DiagnosticLog.e(TAG, "failed to send RTP audio", e);
         }
     }
 
-    private byte[] buildRTPPacket(byte[] payload) {
+    private byte[] buildRtpPacket(byte[] payload) {
         ByteBuffer buffer = ByteBuffer.allocate(12 + payload.length);
-
-        // Byte 0: V(2)=2, P(1)=0, X(1)=0, CC(4)=0
         buffer.put((byte) 0x80);
-
-        // Byte 1: M(1)=0, PT(7)=0 (PCMU)
         buffer.put((byte) 0x00);
-
-        // Bytes 2-3: Sequence Number
         buffer.putShort((short) sequenceNumber);
-
-        // Bytes 4-7: Timestamp
         buffer.putInt((int) timestamp);
-
-        // Bytes 8-11: SSRC
         buffer.putInt(ssrc);
-
-        // Payload
         buffer.put(payload);
-
         return buffer.array();
     }
 
     public void close() {
-        if (socket != null && !socket.isClosed()) {
+        DiagnosticLog.i(TAG, "sender close packets=" + sentPackets);
+        if (!socket.isClosed()) {
             socket.close();
         }
     }

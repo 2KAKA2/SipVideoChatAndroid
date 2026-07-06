@@ -115,6 +115,19 @@ public class LocalMediaServer {
         return buildUrl(filename);
     }
 
+    public String saveText(String content, String originalFileName, String mimeType) throws IOException {
+        String extension = resolveExtension(originalFileName, mimeType);
+        String filename = UUID.randomUUID() + extension;
+        File destFile = new File(mediaDir, filename);
+        byte[] bytes = (content != null ? content : "").getBytes(StandardCharsets.UTF_8);
+
+        try (OutputStream outputStream = new FileOutputStream(destFile)) {
+            outputStream.write(bytes);
+        }
+
+        return buildUrl(filename);
+    }
+
     private String buildUrl(String filename) {
         return "http://" + localIp + ":" + port + "/media/" + filename;
     }

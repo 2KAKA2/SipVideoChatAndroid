@@ -108,6 +108,7 @@ public class LoginActivity extends AppCompatActivity {
         ClientConfig config = new ClientConfig();
         config.setSipServerHost(serverHost);
         config.setSipServerPort(serverPort);
+        config.setAdminServerHost(serverHost);
         config.setUsername(username);
         config.setPassword(password);
         config.setLocalSipPort(localSipPort);

@@ -1,23 +1,24 @@
 package com.sipvideochat.protocol;
 
 /**
- * SIP MESSAGE消息体 - JSON格式
- * 用于文字、图片、语音、视频消息以及群聊信令
- * (从桌面端 src/protocol/SipMessageBody.java 移植)
+ * SIP MESSAGE娑堟伅浣?- JSON鏍煎紡
+ * 鐢ㄤ簬鏂囧瓧銆佸浘鐗囥€佽闊炽€佽棰戞秷鎭互鍙婄兢鑱婁俊浠?
+ * (浠庢闈㈢ src/protocol/SipMessageBody.java 绉绘)
  */
 public class SipMessageBody {
-    // 消息动作类型
+    // 娑堟伅鍔ㄤ綔绫诲瀷
     public static final String ACTION_CHAT = "CHAT";
     public static final String ACTION_JOIN = "JOIN";
     public static final String ACTION_WELCOME = "WELCOME";
     public static final String ACTION_READY = "READY";
     public static final String ACTION_LEAVE = "LEAVE";
     public static final String ACTION_TYPING = "TYPING";
+    public static final String ACTION_GROUP_INVITE = "GROUP_INVITE";
     public static final String ACTION_WEBRTC_OFFER = "WEBRTC_OFFER";
     public static final String ACTION_WEBRTC_ANSWER = "WEBRTC_ANSWER";
     public static final String ACTION_WEBRTC_ICE = "WEBRTC_ICE";
 
-    // 消息内容类型
+    // 娑堟伅鍐呭绫诲瀷
     public static final String MSG_TYPE_TEXT = "text";
     public static final String MSG_TYPE_IMAGE = "image";
     public static final String MSG_TYPE_VOICE = "voice";
@@ -39,9 +40,12 @@ public class SipMessageBody {
     private String iceSdpMid;
     private int iceSdpMLineIndex;
 
-    // 消息内容
+    // 娑堟伅鍐呭
     private String msgType;
     private String msgContent;
+    private String groupName;
+    private String groupDescription;
+    private String groupMembers;
     private String fileUrl;
     private String mimeType;
     private String fileName;
@@ -54,7 +58,7 @@ public class SipMessageBody {
         this.timestamp = System.currentTimeMillis();
     }
 
-    // ============== 工厂方法 ==============
+    // ============== 宸ュ巶鏂规硶 ==============
 
     public static SipMessageBody createTextMessage(String fromUser, String toUser, String content) {
         SipMessageBody body = new SipMessageBody();
@@ -141,6 +145,19 @@ public class SipMessageBody {
         body.setPort(port);
         return body;
     }
+    public static SipMessageBody createGroupInvite(String roomId, String fromUser, String toUser,
+                                                   String groupName, String groupDescription, String groupMembers) {
+        SipMessageBody body = new SipMessageBody();
+        body.setAction(ACTION_GROUP_INVITE);
+        body.setRoomId(roomId);
+        body.setFromUser(fromUser);
+        body.setToUser(toUser);
+        body.setMsgType(MSG_TYPE_TEXT);
+        body.setGroupName(groupName);
+        body.setGroupDescription(groupDescription);
+        body.setGroupMembers(groupMembers);
+        return body;
+    }
 
     public static SipMessageBody createLeaveMessage(String roomId, String fromUser) {
         SipMessageBody body = new SipMessageBody();
@@ -185,7 +202,7 @@ public class SipMessageBody {
         return body;
     }
 
-    // ============== 序列化/反序列化 ==============
+    // ============== 搴忓垪鍖?鍙嶅簭鍒楀寲 ==============
 
     public String toJson() {
         StringBuilder sb = new StringBuilder();
@@ -199,6 +216,9 @@ public class SipMessageBody {
         sb.append("\"port\":").append(port).append(",");
         appendJsonField(sb, "msgType", msgType, true);
         appendJsonField(sb, "msgContent", msgContent, true);
+        appendJsonField(sb, "groupName", groupName, true);
+        appendJsonField(sb, "groupDescription", groupDescription, true);
+        appendJsonField(sb, "groupMembers", groupMembers, true);
         appendJsonField(sb, "fileUrl", fileUrl, true);
         appendJsonField(sb, "mimeType", mimeType, true);
         appendJsonField(sb, "fileName", fileName, true);
@@ -250,6 +270,9 @@ public class SipMessageBody {
         body.setPort(extractJsonInt(json, "port"));
         body.setMsgType(extractJsonString(json, "msgType"));
         body.setMsgContent(extractJsonString(json, "msgContent"));
+        body.setGroupName(extractJsonString(json, "groupName"));
+        body.setGroupDescription(extractJsonString(json, "groupDescription"));
+        body.setGroupMembers(extractJsonString(json, "groupMembers"));
         body.setFileUrl(extractJsonString(json, "fileUrl"));
         body.setMimeType(extractJsonString(json, "mimeType"));
         body.setFileName(extractJsonString(json, "fileName"));
@@ -374,6 +397,15 @@ public class SipMessageBody {
     public String getMsgContent() { return msgContent; }
     public void setMsgContent(String msgContent) { this.msgContent = msgContent; }
 
+    public String getGroupName() { return groupName; }
+    public void setGroupName(String groupName) { this.groupName = groupName; }
+
+    public String getGroupDescription() { return groupDescription; }
+    public void setGroupDescription(String groupDescription) { this.groupDescription = groupDescription; }
+
+    public String getGroupMembers() { return groupMembers; }
+    public void setGroupMembers(String groupMembers) { this.groupMembers = groupMembers; }
+
     public String getFileUrl() { return fileUrl; }
     public void setFileUrl(String fileUrl) { this.fileUrl = fileUrl; }
 
@@ -418,3 +450,4 @@ public class SipMessageBody {
                 '}';
     }
 }
+

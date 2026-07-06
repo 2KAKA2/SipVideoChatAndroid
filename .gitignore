@@ -1,5 +1,6 @@
 .gradle/
-.gradle-home/
+gradle-home/
+gradle-home-user/
 .idea/
 build/
 */build/
@@ -14,3 +15,4 @@ tools/pc-relay/*.class
 tools/pc-relay/relay_test.txt
 sip_config.xml
 *.tmp
+*.class

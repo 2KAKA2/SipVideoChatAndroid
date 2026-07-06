@@ -70,6 +70,15 @@
                 android:text="添加"
                 android:textStyle="bold"
                 app:cornerRadius="16dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCreateGroup"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="50dp"
+                android:layout_marginStart="8dp"
+                android:text="建群"
+                app:cornerRadius="16dp" />
         </LinearLayout>
     </LinearLayout>
 

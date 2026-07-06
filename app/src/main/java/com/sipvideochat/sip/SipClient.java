@@ -3,12 +3,18 @@ package com.sipvideochat.sip;
 import android.util.Log;
 
 import com.sipvideochat.config.ClientConfig;
+import com.sipvideochat.media.LocalMediaServer;
 import com.sipvideochat.model.Message;
 import com.sipvideochat.protocol.SipMessageBody;
+import com.sipvideochat.util.DiagnosticLog;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.URL;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -17,6 +23,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * SIP鐎广垺鍩涚粩?- 閸樼喎顫?UDP 鐎圭偟骞囬敍鍫滅瑝娓氭繆绂?JAIN-SIP閿?
@@ -26,30 +34,49 @@ public class SipClient {
     private static final String TAG = "SipClient";
     private static final String MESSAGE_CONTENT_TYPE_JSON = "application/json";
     private static final String MESSAGE_CONTENT_TYPE_TEXT = "text/plain;charset=UTF-8";
+    private static final String HEADER_CALL_TYPE = "X-SipVideoChat-Call-Type";
+    private static final String HEADER_WEBRTC_SDP_URL = "X-SipVideoChat-WebRTC-Sdp-Url";
+    private static final String CALL_TYPE_VIDEO = "video";
+    private static final int REMOTE_SDP_FETCH_TIMEOUT_MS = 5000;
+    private static final int PC_COMPAT_SIP_PORT = 5062;
 
     private final ClientConfig config;
     private final List<SipEventListener> listeners = new ArrayList<>();
 
     // UDP Socket
     private DatagramSocket socket;
+    private DatagramSocket compatibilitySocket;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean registered = new AtomicBoolean(false);
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private ScheduledFuture<?> registerTimeoutFuture;
+    private ScheduledFuture<?> inviteTimeoutFuture;
     private static final long REGISTER_TIMEOUT_MS = 8000;
+    private static final long MESSAGE_TIMEOUT_MS = 8000;
+    private static final long INVITE_TIMEOUT_MS = 12000;
+    private static final int MAX_SAFE_UDP_SIP_BYTES = 1200;
 
     // 濞夈劌鍞介悩鑸碘偓?
     private String registerCallId;
     private String registerFromTag;
     private int registerCseq = 1;
     private boolean registerAuthAttempted = false;
+    private long lastRegisterSuccessAtMs;
+    private long registrationExpiresAtMs;
 
     // 闁俺鐦介悩鑸碘偓?
     private String currentCallId;
     private String currentFromTag;
     private String currentToTag;
+    private String currentRemoteUri;
+    private int currentLocalCseq = 1;
+    private String currentInviteBranch;
+    private boolean currentInviteVideo;
+    private int currentInviteBodyBytes;
+    private int currentInvitePacketBytes;
     private String remoteContact; // 鐎佃鏌熼惃?Contact 閸︽澘娼?
     private boolean inCall = false;
+    private boolean outgoingInvitePending = false;
     private String lastInviteFailureKey;
 
     // 娣囨繂鐡ㄩ弶銉ф暩娣団剝浼?
@@ -63,6 +90,7 @@ public class SipClient {
     private final AtomicBoolean keepAliveRunning = new AtomicBoolean(false);
     private Thread keepAliveThread;
     private Thread recvThread;
+    private Thread compatibilityRecvThread;
 
     public SipClient(ClientConfig config) {
         this.config = config;
@@ -104,6 +132,7 @@ public class SipClient {
         }, "sip-recv");
         recvThread.setDaemon(true);
         recvThread.start();
+        startCompatibilityReceiverIfNeeded();
 
         Log.w(TAG, "SIP Client started: " + config.getLocalIp() + ":" + config.getLocalSipPort());
 
@@ -115,7 +144,11 @@ public class SipClient {
         running.set(false);
         keepAliveRunning.set(false);
         registered.set(false);
-        inCall = false;
+        cancelInviteTimeout();
+        resetCallState();
+        for (OutgoingMessageTx tx : pendingMessageTx.values()) {
+            cancelMessageTimeout(tx);
+        }
         pendingMessageTx.clear();
         registerCallId = null;
         registerFromTag = null;
@@ -124,32 +157,93 @@ public class SipClient {
         try {
             if (socket != null) socket.close();
         } catch (Exception e) { /* ignore */ }
+        try {
+            if (compatibilitySocket != null) compatibilitySocket.close();
+        } catch (Exception e) { /* ignore */ }
         socket = null;
+        compatibilitySocket = null;
         scheduler.shutdownNow();
     }
 
     // ============== 濞夈劌鍞?==============
 
+    private void startCompatibilityReceiverIfNeeded() {
+        if (config.getLocalSipPort() == PC_COMPAT_SIP_PORT || compatibilitySocket != null) {
+            return;
+        }
+        try {
+            compatibilitySocket = new DatagramSocket(PC_COMPAT_SIP_PORT);
+        } catch (Exception e) {
+            Log.w(TAG, "Compat SIP listener unavailable on port " + PC_COMPAT_SIP_PORT + ": " + e.getMessage());
+            DiagnosticLog.w(TAG, "compat sip listener unavailable port=" + PC_COMPAT_SIP_PORT + ": " + e.getMessage());
+            compatibilitySocket = null;
+            return;
+        }
+        compatibilityRecvThread = new Thread(() -> {
+            byte[] buf = new byte[64 * 1024];
+            while (running.get()) {
+                try {
+                    DatagramPacket pkt = new DatagramPacket(buf, buf.length);
+                    DatagramSocket s = compatibilitySocket;
+                    if (s == null) break;
+                    s.receive(pkt);
+                    String msg = new String(pkt.getData(), 0, pkt.getLength(), "UTF-8");
+                    Log.d(TAG, "<<[compat] " + msg.split("\r\n")[0] + " from "
+                            + pkt.getAddress().getHostAddress() + ":" + pkt.getPort());
+                    handleIncoming(msg, pkt.getAddress(), pkt.getPort());
+                } catch (Exception e) {
+                    if (running.get()) {
+                        Log.w(TAG, "compat recv error: " + e.getMessage());
+                    }
+                }
+            }
+        }, "sip-recv-compat-5062");
+        compatibilityRecvThread.setDaemon(true);
+        compatibilityRecvThread.start();
+        Log.i(TAG, "Compat SIP listener started on port " + PC_COMPAT_SIP_PORT);
+        DiagnosticLog.i(TAG, "compat sip listener started port=" + PC_COMPAT_SIP_PORT);
+    }
+
     public void register() throws Exception {
+        boolean hadActiveRegistration = isRegistrationAlive();
         registerCallId = (registerCallId != null) ? registerCallId : uuid();
         registerFromTag = (registerFromTag != null) ? registerFromTag : shortUuid();
         registerCseq = 1;
         registerAuthAttempted = false;
+        if (!hadActiveRegistration) {
+            registered.set(false);
+            registrationExpiresAtMs = 0L;
+        }
         String req = buildRegisterRequest(120, registerCallId, registerCseq, null);
         scheduleRegisterTimeout(registerCallId, registerCseq);
         send(req);
         Log.d(TAG, "REGISTER context user=" + config.getUsername()
                 + ", local=" + config.getLocalIp() + ":" + config.getLocalSipPort()
-                + ", server=" + config.getSipServerHost() + ":" + config.getSipServerPort());
+                + ", server=" + config.getSipServerHost() + ":" + config.getSipServerPort()
+                + ", hadActiveRegistration=" + hadActiveRegistration);
         Log.w(TAG, "REGISTER sent");
+        DiagnosticLog.i(TAG, "register sent user=" + config.getUsername()
+                + ", local=" + config.getLocalIp() + ":" + config.getLocalSipPort()
+                + ", server=" + config.getSipServerHost() + ":" + config.getSipServerPort()
+                + ", hadActiveRegistration=" + hadActiveRegistration);
     }
 
     private void handleRegisterResponse(Map<String, String> headers, int statusCode) {
+        Log.i(TAG, "REGISTER response status=" + statusCode
+                + ", callId=" + getHeader(headers, "Call-ID")
+                + ", cseq=" + getHeader(headers, "CSeq"));
+        DiagnosticLog.i(TAG, "register response status=" + statusCode
+                + ", callId=" + getHeader(headers, "Call-ID")
+                + ", cseq=" + getHeader(headers, "CSeq"));
         if (statusCode == 200) {
             cancelRegisterTimeout();
             registered.set(true);
+            lastRegisterSuccessAtMs = System.currentTimeMillis();
+            long expiresSeconds = resolveRegisterExpiresSeconds(headers);
+            registrationExpiresAtMs = lastRegisterSuccessAtMs + expiresSeconds * 1000L;
             startKeepAlive();
-            Log.w(TAG, "REGISTER success");
+            Log.w(TAG, "REGISTER success, expiresIn=" + expiresSeconds + "s, registeredUntil=" + registrationExpiresAtMs);
+            DiagnosticLog.i(TAG, "register success expiresIn=" + expiresSeconds + "s, registeredUntil=" + registrationExpiresAtMs);
             for (SipEventListener l : listeners) l.onRegistered();
         } else if (statusCode == 401) {
             cancelRegisterTimeout();
@@ -201,6 +295,7 @@ public class SipClient {
         }
         OutgoingMessageTx tx = new OutgoingMessageTx(callId, fromTag, targetUser, requestUri, body.toJson(), messageId);
         pendingMessageTx.put(callId, tx);
+        scheduleMessageTimeout(tx);
         Log.i(TAG, "Create MESSAGE tx callId=" + callId
                 + ", messageId=" + messageId
                 + ", target=" + targetUser
@@ -231,14 +326,40 @@ public class SipClient {
     // ============== 閸欐垼鎹ｉ柅姘崇樈 ==============
 
     public void makeCall(String targetUser, boolean videoEnabled) throws Exception {
+        makeCall(targetUser, videoEnabled, null);
+    }
+
+    public void makeCall(String targetUser, boolean videoEnabled, String customSdp) throws Exception {
+        if (!isRegistrationAlive()) {
+            Log.w(TAG, "Skip INVITE because registration is not active for user=" + config.getUsername());
+            for (SipEventListener l : listeners) l.onCallFailed("SIP not registered");
+            return;
+        }
+        resetCallState();
         currentCallId = uuid();
         currentFromTag = shortUuid();
         currentToTag = null;
+        currentLocalCseq = 1;
         lastInviteFailureKey = null;
-        String sdp = buildSDP(videoEnabled);
+        outgoingInvitePending = true;
+        currentInviteVideo = videoEnabled;
+        String sdpUrl = null;
+        String sdp;
+        if (videoEnabled) {
+            String offerSdp = normalizeSdpBody(customSdp);
+            if (offerSdp == null || offerSdp.trim().isEmpty()) {
+                throw new IllegalArgumentException("Video offer SDP unavailable");
+            }
+            sdpUrl = publishWebRtcSdp(offerSdp, currentCallId, "offer");
+            sdp = buildVideoSignalSdp(sdpUrl);
+        } else {
+            sdp = normalizeSdpBody((customSdp != null && !customSdp.trim().isEmpty()) ? customSdp : buildSDP(false));
+        }
+        currentInviteBodyBytes = utf8Length(sdp);
+        currentInviteBranch = branch();
 
         LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
-        hdrs.put("Via", "SIP/2.0/UDP " + config.getLocalIp() + ":" + config.getLocalSipPort() + ";branch=" + branch() + ";rport");
+        hdrs.put("Via", "SIP/2.0/UDP " + config.getLocalIp() + ":" + config.getLocalSipPort() + ";branch=" + currentInviteBranch + ";rport");
         hdrs.put("Max-Forwards", "70");
         hdrs.put("From", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">;tag=" + currentFromTag);
         hdrs.put("To", "<sip:" + targetUser + "@" + config.getSipServerHost() + ">");
@@ -246,32 +367,112 @@ public class SipClient {
         hdrs.put("CSeq", "1 INVITE");
         hdrs.put("Contact", "<sip:" + config.getUsername() + "@" + config.getLocalIp() + ":" + config.getLocalSipPort() + ">");
         hdrs.put("User-Agent", "SipVideoChat-Android");
+        if (videoEnabled) {
+            hdrs.put(HEADER_CALL_TYPE, CALL_TYPE_VIDEO);
+            if (sdpUrl != null && !sdpUrl.trim().isEmpty()) {
+                hdrs.put(HEADER_WEBRTC_SDP_URL, sdpUrl);
+            }
+        }
 
         String requestUri = getRequestUri(targetUser);
+        currentRemoteUri = requestUri;
         String msg = buildSipMessage("INVITE " + requestUri + " SIP/2.0", hdrs, "application/sdp", sdp);
+        currentInvitePacketBytes = utf8Length(msg);
         send(msg);
+        scheduleInviteTimeout(currentCallId, currentLocalCseq, targetUser);
+        Log.i(TAG, "INVITE sent target=" + targetUser
+                + ", requestUri=" + requestUri
+                + ", callId=" + currentCallId
+                + ", cseq=" + currentLocalCseq
+                + ", contentType=application/sdp"
+                + ", bodyLength=" + currentInviteBodyBytes
+                + ", packetBytes=" + currentInvitePacketBytes
+                + ", sdpUrl=" + sdpUrl
+                + ", video=" + currentInviteVideo
+                + ", registrationAlive=" + isRegistrationAlive());
+        DiagnosticLog.i(TAG, "invite sent target=" + targetUser
+                + ", requestUri=" + requestUri
+                + ", callId=" + currentCallId
+                + ", bodyLength=" + currentInviteBodyBytes
+                + ", packetBytes=" + currentInvitePacketBytes
+                + ", sdpUrl=" + sdpUrl
+                + ", video=" + currentInviteVideo);
+        if (currentInvitePacketBytes > MAX_SAFE_UDP_SIP_BYTES) {
+            Log.w(TAG, "INVITE packet likely exceeds safe UDP size, packetBytes=" + currentInvitePacketBytes
+                    + ", threshold=" + MAX_SAFE_UDP_SIP_BYTES);
+        }
         Log.w(TAG, "INVITE 閸欐垿鈧礁鍩? " + targetUser);
     }
 
     // ============== 閹恒儱鎯夐弶銉ф暩 ==============
 
     public void answerCall(IncomingInvite invite, boolean videoEnabled) throws Exception {
-        String sdp = buildSDP(videoEnabled);
+        answerCall(invite, videoEnabled, null);
+    }
+
+    public void answerCall(IncomingInvite invite, boolean videoEnabled, String customSdp) throws Exception {
+        resetCallState();
+        String sdpUrl = null;
+        String sdp;
+        if (videoEnabled) {
+            String answerSdp = normalizeSdpBody(customSdp);
+            if (answerSdp != null && !answerSdp.trim().isEmpty()) {
+                sdpUrl = publishWebRtcSdp(answerSdp, invite.callId, "answer");
+                sdp = buildVideoSignalSdp(sdpUrl);
+            } else {
+                // Legacy RTP video answer for peers that do not understand the WebRTC bridge.
+                sdp = normalizeSdpBody(buildSDP(true));
+            }
+        } else {
+            sdp = normalizeSdpBody((customSdp != null && !customSdp.trim().isEmpty()) ? customSdp : buildSDP(false));
+        }
+        String localTag = invite.toTag != null ? invite.toTag : shortUuid();
+        String responseToHeader = invite.toHeader + (invite.toTag != null ? "" : ";tag=" + localTag);
 
         LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
         hdrs.put("Via", invite.viaHeader);
         hdrs.put("From", invite.fromHeader);
-        hdrs.put("To", invite.toHeader + (invite.toTag != null ? "" : ";tag=" + shortUuid()));
+        hdrs.put("To", responseToHeader);
         hdrs.put("Call-ID", invite.callId);
         hdrs.put("CSeq", invite.cseq + " INVITE");
         hdrs.put("Contact", "<sip:" + config.getUsername() + "@" + config.getLocalIp() + ":" + config.getLocalSipPort() + ">");
         hdrs.put("User-Agent", "SipVideoChat-Android");
+        if (videoEnabled) {
+            hdrs.put(HEADER_CALL_TYPE, CALL_TYPE_VIDEO);
+            if (sdpUrl != null && !sdpUrl.trim().isEmpty()) {
+                hdrs.put(HEADER_WEBRTC_SDP_URL, sdpUrl);
+            }
+        }
 
         String resp = buildSipMessage("SIP/2.0 200 OK", hdrs, "application/sdp", sdp);
         sendTo(resp, invite.sourceAddress, invite.sourcePort);
 
         currentCallId = invite.callId;
+        currentFromTag = extractTag(responseToHeader);
+        currentToTag = extractTag(invite.fromHeader);
+        currentRemoteUri = extractSipUri(invite.fromHeader);
+        currentLocalCseq = Math.max(1, invite.cseq + 1);
+        remoteContact = extractSipUri(invite.contactHeader);
+        if (remoteContact == null || remoteContact.isEmpty()) {
+            remoteContact = currentRemoteUri;
+        }
         inCall = true;
+        outgoingInvitePending = false;
+        currentInviteBranch = null;
+        lastInviteFailureKey = null;
+        pendingIncomingInvite = null;
+        Log.i(TAG, "Answered INVITE with 200 OK, from=" + invite.fromUser
+                + ", callId=" + invite.callId
+                + ", cseq=" + invite.cseq
+                + ", bodyLength=" + sdp.length()
+                + ", sdpUrl=" + sdpUrl
+                + ", remoteContact=" + remoteContact);
+        DiagnosticLog.i(TAG, "answer sent 200 OK from=" + invite.fromUser
+                + ", callId=" + invite.callId
+                + ", cseq=" + invite.cseq
+                + ", bodyLength=" + sdp.length()
+                + ", sdpUrl=" + sdpUrl
+                + ", remoteContact=" + remoteContact);
         Log.w(TAG, "200 OK 瀹告彃褰傞柅渚婄礉閹恒儱鎯夐弶銉ф暩");
     }
 
@@ -289,6 +490,7 @@ public class SipClient {
         String resp = buildSipMessage("SIP/2.0 603 Decline", hdrs, null, null);
         sendTo(resp, invite.sourceAddress, invite.sourcePort);
         Log.w(TAG, "Incoming call rejected");
+        DiagnosticLog.i(TAG, "incoming call rejected callId=" + invite.callId + ", from=" + invite.fromUser);
     }
 
     // ============== 閹稿倹鏌?==============
@@ -296,21 +498,38 @@ public class SipClient {
     public void hangup() throws Exception {
         if (currentCallId == null) return;
 
+        if (outgoingInvitePending && !inCall) {
+            sendCancelForPendingInvite();
+            Log.i(TAG, "CANCEL sent for pending INVITE, callId=" + currentCallId
+                    + ", requestUri=" + currentRemoteUri);
+            resetCallState();
+            return;
+        }
+
+        currentLocalCseq = Math.max(2, currentLocalCseq + 1);
+        String requestUri = (remoteContact != null && !remoteContact.isEmpty())
+                ? remoteContact
+                : ((currentRemoteUri != null && !currentRemoteUri.isEmpty())
+                ? currentRemoteUri
+                : "sip:" + config.getSipServerHost() + ":" + config.getSipServerPort());
+        String fromTag = currentFromTag != null ? currentFromTag : shortUuid();
+        String toHeader = "<" + requestUri + ">" + (currentToTag != null ? ";tag=" + currentToTag : "");
+
         LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
         hdrs.put("Via", "SIP/2.0/UDP " + config.getLocalIp() + ":" + config.getLocalSipPort() + ";branch=" + branch() + ";rport");
         hdrs.put("Max-Forwards", "70");
-        hdrs.put("From", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">;tag=" + currentFromTag);
-        hdrs.put("To", "<sip:remote@" + config.getSipServerHost() + ">" + (currentToTag != null ? ";tag=" + currentToTag : ""));
+        hdrs.put("From", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">;tag=" + fromTag);
+        hdrs.put("To", toHeader);
         hdrs.put("Call-ID", currentCallId);
-        hdrs.put("CSeq", "2 BYE");
+        hdrs.put("CSeq", currentLocalCseq + " BYE");
+        hdrs.put("Contact", "<sip:" + config.getUsername() + "@" + config.getLocalIp() + ":" + config.getLocalSipPort() + ">");
         hdrs.put("User-Agent", "SipVideoChat-Android");
 
-        String msg = buildSipMessage("BYE sip:" + config.getSipServerHost() + ":" + config.getSipServerPort() + " SIP/2.0", hdrs, null, null);
+        String msg = buildSipMessage("BYE " + requestUri + " SIP/2.0", hdrs, null, null);
         send(msg);
-
-        inCall = false;
-        currentCallId = null;
-        Log.w(TAG, "BYE sent");
+        String callId = currentCallId;
+        resetCallState();
+        Log.i(TAG, "BYE sent, callId=" + callId + ", requestUri=" + requestUri);
     }
 
     public void addUserContact(String username, String ip, int port) {
@@ -350,9 +569,9 @@ public class SipClient {
 
                 String method = extractCSeqMethod(cseqHeader);
                 if ("REGISTER".equals(method)) {
-                    handleRegisterResponse(headers, statusCode);
+                    handleRegisterResponseCompat(headers, statusCode);
                 } else if ("INVITE".equals(method)) {
-                    handleInviteResponse(headers, statusCode, body, sourceAddr, sourcePort);
+                    handleInviteResponseCompat(headers, statusCode, body, sourceAddr, sourcePort);
                 } else if ("MESSAGE".equals(method)) {
                     handleMessageResponse(headers, statusCode);
                 }
@@ -364,7 +583,7 @@ public class SipClient {
 
                 switch (method) {
                     case "INVITE":
-                        handleIncomingInvite(headers, body, sourceAddr, sourcePort);
+                        handleIncomingInviteCompat(headers, body, sourceAddr, sourcePort);
                         break;
                     case "ACK":
                         // ACK 绾喛顓婚柅姘崇樈瀵よ櫣鐝?
@@ -405,6 +624,10 @@ public class SipClient {
             if (toHeader != null && toHeader.contains("tag=")) {
                 currentToTag = extractTag(toHeader);
             }
+            String contactHeader = getHeader(headers, "Contact");
+            if (contactHeader != null && !contactHeader.isEmpty()) {
+                remoteContact = extractSipUri(contactHeader);
+            }
             try {
                 sendAck(headers, sourceAddr, sourcePort);
             } catch (Exception e) {
@@ -438,9 +661,296 @@ public class SipClient {
                 lastInviteFailureKey = failureKey;
             }
 
-            inCall = false;
-            currentCallId = null;
-            currentToTag = null;
+            resetCallState();
+        }
+    }
+
+    private void handleRegisterResponseCompat(Map<String, String> headers, int statusCode) {
+        Log.i(TAG, "REGISTER response status=" + statusCode
+                + ", callId=" + getHeader(headers, "Call-ID")
+                + ", cseq=" + getHeader(headers, "CSeq"));
+        if (statusCode == 200) {
+            cancelRegisterTimeout();
+            registered.set(true);
+            lastRegisterSuccessAtMs = System.currentTimeMillis();
+            long expiresSeconds = resolveRegisterExpiresSeconds(headers);
+            registrationExpiresAtMs = lastRegisterSuccessAtMs + expiresSeconds * 1000L;
+            startKeepAlive();
+            Log.i(TAG, "REGISTER success expiresIn=" + expiresSeconds + "s");
+            for (SipEventListener listener : listeners) {
+                listener.onRegistered();
+            }
+            return;
+        }
+
+        if (statusCode == 401) {
+            cancelRegisterTimeout();
+            if (registerAuthAttempted) {
+                registered.set(false);
+                registrationExpiresAtMs = 0L;
+                for (SipEventListener listener : listeners) {
+                    listener.onRegisterFailed("Digest auth rejected");
+                }
+                return;
+            }
+            String www = getHeader(headers, "WWW-Authenticate");
+            if (www == null) {
+                www = getHeader(headers, "Proxy-Authenticate");
+            }
+            if (www == null || www.isEmpty()) {
+                registered.set(false);
+                registrationExpiresAtMs = 0L;
+                for (SipEventListener listener : listeners) {
+                    listener.onRegisterFailed("401 without challenge");
+                }
+                return;
+            }
+            try {
+                registerAuthAttempted = true;
+                String auth = buildDigestAuth(www, "REGISTER",
+                        "sip:" + config.getSipServerHost() + ":" + config.getSipServerPort(),
+                        config.getUsername(), config.getPassword());
+                String callId = getHeader(headers, "Call-ID");
+                if (callId == null || callId.isEmpty()) {
+                    callId = registerCallId;
+                }
+                registerCseq++;
+                String req = buildRegisterRequest(120, callId, registerCseq, auth);
+                scheduleRegisterTimeout(callId, registerCseq);
+                send(req);
+                Log.i(TAG, "Authenticated REGISTER sent callId=" + callId + ", cseq=" + registerCseq);
+            } catch (Exception e) {
+                registered.set(false);
+                registrationExpiresAtMs = 0L;
+                Log.e(TAG, "Digest auth calculation failed", e);
+                for (SipEventListener listener : listeners) {
+                    listener.onRegisterFailed("Digest auth calculation failed");
+                }
+            }
+            return;
+        }
+
+        cancelRegisterTimeout();
+        registered.set(false);
+        registrationExpiresAtMs = 0L;
+        for (SipEventListener listener : listeners) {
+            listener.onRegisterFailed("Register failed: " + statusCode);
+        }
+    }
+
+    private void handleInviteResponseCompat(Map<String, String> headers, int statusCode, String body,
+                                            InetAddress sourceAddr, int sourcePort) {
+        String callId = getHeader(headers, "Call-ID");
+        int cseq = parseCSeqNumber(getHeader(headers, "CSeq"));
+        String normalizedBody = normalizeSdpBody(body);
+        String sdpUrl = firstNonEmpty(
+                getHeader(headers, HEADER_WEBRTC_SDP_URL),
+                extractWebRtcSdpUrlFromBody(normalizedBody));
+        Log.i(TAG, "INVITE response status=" + statusCode
+                + ", callId=" + callId
+                + ", cseq=" + cseq
+                + ", from=" + (sourceAddr != null ? sourceAddr.getHostAddress() : "unknown") + ":" + sourcePort
+                + ", bodyLength=" + (normalizedBody != null ? normalizedBody.length() : 0)
+                + ", sdpUrl=" + sdpUrl);
+
+        if (currentCallId != null && callId != null && !callId.equals(currentCallId)) {
+            Log.w(TAG, "Ignore stale INVITE response callId=" + callId + ", currentCallId=" + currentCallId);
+            return;
+        }
+
+        if (statusCode >= 100 && statusCode < 200) {
+            cancelInviteTimeout();
+            if (statusCode == 180 || statusCode == 183) {
+                for (SipEventListener listener : listeners) {
+                    listener.onCallRinging();
+                }
+            }
+            return;
+        }
+
+        if (statusCode >= 200 && statusCode < 300) {
+            cancelInviteTimeout();
+            String toHeader = getHeader(headers, "To");
+            if (toHeader != null && toHeader.contains("tag=")) {
+                currentToTag = extractTag(toHeader);
+            }
+            String contactHeader = getHeader(headers, "Contact");
+            if (contactHeader != null && !contactHeader.isEmpty()) {
+                remoteContact = extractSipUri(contactHeader);
+            }
+            try {
+                sendAck(headers, sourceAddr, sourcePort);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to send ACK for 2xx INVITE", e);
+            }
+            String resolvedSdp = normalizedBody;
+            if (currentInviteVideo && sdpUrl != null && !sdpUrl.trim().isEmpty()) {
+                try {
+                    resolvedSdp = fetchRemoteWebRtcSdp(sdpUrl);
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to fetch remote video answer from " + sdpUrl, e);
+                    DiagnosticLog.e(TAG, "failed to fetch remote video answer url=" + sdpUrl, e);
+                    for (SipEventListener listener : listeners) {
+                        listener.onCallFailed("Failed to resolve remote video answer");
+                    }
+                    resetCallState();
+                    return;
+                }
+            }
+            inCall = true;
+            outgoingInvitePending = false;
+            lastInviteFailureKey = null;
+            for (SipEventListener listener : listeners) {
+                listener.onCallConnected(resolvedSdp);
+            }
+            return;
+        }
+
+        cancelInviteTimeout();
+        outgoingInvitePending = false;
+        try {
+            sendAck(headers, sourceAddr, sourcePort);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to send ACK for non-2xx INVITE", e);
+        }
+        String failureKey = (callId != null ? callId : "") + "|" + cseq + "|" + statusCode;
+        if (!failureKey.equals(lastInviteFailureKey)) {
+            notifyInviteFailure(statusCode);
+            lastInviteFailureKey = failureKey;
+        }
+        resetCallState();
+    }
+
+    private void handleIncomingInviteCompat(Map<String, String> headers, String body,
+                                            InetAddress sourceAddr, int sourcePort) throws Exception {
+        String contentType = getHeader(headers, "Content-Type");
+        String normalizedBody = normalizeSdpBody(body);
+        String remoteSdpUrl = firstNonEmpty(
+                getHeader(headers, HEADER_WEBRTC_SDP_URL),
+                extractWebRtcSdpUrlFromBody(normalizedBody));
+        boolean videoHint = CALL_TYPE_VIDEO.equalsIgnoreCase(getHeader(headers, HEADER_CALL_TYPE))
+                || CALL_TYPE_VIDEO.equalsIgnoreCase(extractCallTypeFromBody(normalizedBody))
+                || (remoteSdpUrl != null && !remoteSdpUrl.trim().isEmpty());
+        int bodyBytes = utf8Length(normalizedBody);
+        InviteSdpInfo placeholderInfo = inspectInviteSdp(normalizedBody);
+        Log.i(TAG, "Incoming INVITE raw contentType=" + contentType
+                + ", bodyBytes=" + bodyBytes
+                + ", hasAudio=" + placeholderInfo.hasAudio
+                + ", hasVideo=" + placeholderInfo.hasVideo
+                + ", validSdp=" + placeholderInfo.valid
+                + ", parseResult=" + placeholderInfo.parseResult
+                + ", videoHint=" + videoHint
+                + ", sdpUrl=" + remoteSdpUrl
+                + ", firstLine=" + firstSdpLine(normalizedBody));
+        DiagnosticLog.i(TAG, "incoming invite raw contentType=" + contentType
+                + ", bodyBytes=" + bodyBytes
+                + ", hasAudio=" + placeholderInfo.hasAudio
+                + ", hasVideo=" + placeholderInfo.hasVideo
+                + ", validSdp=" + placeholderInfo.valid
+                + ", parseResult=" + placeholderInfo.parseResult
+                + ", videoHint=" + videoHint
+                + ", sdpUrl=" + remoteSdpUrl
+                + ", firstLine=" + firstSdpLine(normalizedBody));
+
+        if (!isSupportedInviteContentType(contentType)) {
+            Log.w(TAG, "Reject incoming INVITE due to unsupported content type: " + contentType);
+            sendResponse(headers, 415, "Unsupported Media Type", sourceAddr, sourcePort);
+            return;
+        }
+
+        sendResponse(headers, 100, "Trying", sourceAddr, sourcePort);
+
+        String resolvedSdp = normalizedBody;
+        if (videoHint && remoteSdpUrl != null && !remoteSdpUrl.trim().isEmpty()) {
+            try {
+                resolvedSdp = fetchRemoteWebRtcSdp(remoteSdpUrl);
+            } catch (Exception e) {
+                Log.e(TAG, "Reject incoming video INVITE because remote SDP fetch failed: " + remoteSdpUrl, e);
+                DiagnosticLog.e(TAG, "incoming video invite fetch failed url=" + remoteSdpUrl, e);
+                sendResponse(headers, 488, "Not Acceptable Here", sourceAddr, sourcePort);
+                return;
+            }
+        }
+
+        InviteSdpInfo effectiveInfo = inspectInviteSdp(resolvedSdp);
+        if (!effectiveInfo.valid || (videoHint && !effectiveInfo.hasVideo)) {
+            Log.w(TAG, "Reject incoming INVITE due to invalid effective SDP: " + effectiveInfo.parseResult
+                    + ", videoHint=" + videoHint
+                    + ", hasVideo=" + effectiveInfo.hasVideo);
+            sendResponse(headers, 488, "Not Acceptable Here", sourceAddr, sourcePort);
+            return;
+        }
+
+        sendResponse(headers, 180, "Ringing", sourceAddr, sourcePort);
+
+        String fromHeader = getHeader(headers, "From");
+        String fromUser = extractUser(fromHeader);
+        String callId = getHeader(headers, "Call-ID");
+        String cseqHeader = getHeader(headers, "CSeq");
+        int cseq = parseCSeqNumber(cseqHeader);
+        String contactHeader = getHeader(headers, "Contact");
+        cacheUserContact(fromUser, contactHeader);
+
+        Log.i(TAG, "Incoming INVITE from=" + fromUser
+                + ", callId=" + callId
+                + ", cseq=" + cseq
+                + ", source=" + sourceAddr.getHostAddress() + ":" + sourcePort
+                + ", contentType=" + contentType
+                + ", bodyLength=" + bodyBytes
+                + ", contact=" + contactHeader
+                + ", resolvedSdpLength=" + utf8Length(resolvedSdp)
+                + ", detectedCallType=" + (videoHint || effectiveInfo.hasVideo ? "video" : "audio"));
+        DiagnosticLog.i(TAG, "incoming invite from=" + fromUser
+                + ", callId=" + callId
+                + ", cseq=" + cseq
+                + ", source=" + sourceAddr.getHostAddress() + ":" + sourcePort
+                + ", resolvedSdpLength=" + utf8Length(resolvedSdp)
+                + ", detectedCallType=" + (videoHint || effectiveInfo.hasVideo ? "video" : "audio"));
+
+        IncomingInvite invite = new IncomingInvite();
+        invite.fromUser = fromUser;
+        invite.sdp = resolvedSdp;
+        invite.callId = callId;
+        invite.cseq = cseq;
+        invite.viaHeader = getHeader(headers, "Via");
+        invite.fromHeader = fromHeader;
+        invite.toHeader = getHeader(headers, "To");
+        invite.toTag = extractTag(invite.toHeader);
+        invite.contactHeader = contactHeader;
+        invite.sourceAddress = sourceAddr;
+        invite.sourcePort = sourcePort;
+
+        pendingIncomingInvite = invite;
+
+        for (SipEventListener listener : listeners) {
+            listener.onIncomingCall(fromUser, resolvedSdp, invite);
+        }
+    }
+
+    private void notifyInviteFailure(int statusCode) {
+        String reason;
+        switch (statusCode) {
+            case 408:
+                reason = "Request Timeout";
+                break;
+            case 480:
+                reason = "Temporarily Unavailable";
+                break;
+            case 486:
+                reason = "Busy Here";
+                break;
+            case 487:
+                reason = "Request Terminated";
+                break;
+            case 603:
+                reason = "Declined";
+                break;
+            default:
+                reason = "SIP " + statusCode;
+                break;
+        }
+        for (SipEventListener listener : listeners) {
+            listener.onCallFailed(reason);
         }
     }
 
@@ -456,6 +966,7 @@ public class SipClient {
         }
 
         if (statusCode >= 200 && statusCode < 300) {
+            cancelMessageTimeout(tx);
             pendingMessageTx.remove(callId);
             Log.w(TAG, "MESSAGE delivered, callId=" + callId + ", status=" + statusCode);
             notifyMessageStatus(tx.messageId, Message.MessageStatus.SENT, null);
@@ -466,10 +977,12 @@ public class SipClient {
             tx.retriedAsTextPlain = true;
             tx.cseq++;
             try {
+                scheduleMessageTimeout(tx);
                 sendMessageRequest(tx, MESSAGE_CONTENT_TYPE_TEXT);
                 Log.w(TAG, "MESSAGE got 406, retried with contentType=" + MESSAGE_CONTENT_TYPE_TEXT
                         + ", callId=" + callId);
             } catch (Exception e) {
+                cancelMessageTimeout(tx);
                 pendingMessageTx.remove(callId);
                 Log.e(TAG, "MESSAGE 406 fallback retry failed, callId=" + callId, e);
                 notifyMessageStatus(tx.messageId, Message.MessageStatus.FAILED, "406 fallback retry failed");
@@ -477,6 +990,7 @@ public class SipClient {
             return;
         }
 
+        cancelMessageTimeout(tx);
         pendingMessageTx.remove(callId);
         Log.w(TAG, "MESSAGE failed, status=" + statusCode
                 + ", callId=" + callId
@@ -504,7 +1018,10 @@ public class SipClient {
         hdrs.put("CSeq", cseqNum + " ACK");
         hdrs.put("User-Agent", "SipVideoChat-Android");
 
-        String requestUri = extractSipUri(toH);
+        String requestUri = extractSipUri(getHeader(headers, "Contact"));
+        if (requestUri == null || requestUri.isEmpty()) {
+            requestUri = extractSipUri(toH);
+        }
         if (requestUri == null || requestUri.isEmpty()) {
             requestUri = "sip:" + config.getSipServerHost() + ":" + config.getSipServerPort();
         }
@@ -547,9 +1064,10 @@ public class SipClient {
     }
 
     private void handleIncomingBye(Map<String, String> headers, InetAddress sourceAddr, int sourcePort) throws Exception {
+        Log.i(TAG, "Incoming BYE callId=" + getHeader(headers, "Call-ID")
+                + ", from=" + sourceAddr.getHostAddress() + ":" + sourcePort);
         sendResponse(headers, 200, "OK", sourceAddr, sourcePort);
-        inCall = false;
-        currentCallId = null;
+        resetCallState();
         for (SipEventListener l : listeners) l.onCallEnded();
     }
 
@@ -575,7 +1093,11 @@ public class SipClient {
     }
 
     private void handleIncomingCancel(Map<String, String> headers, InetAddress sourceAddr, int sourcePort) throws Exception {
+        Log.i(TAG, "Incoming CANCEL callId=" + getHeader(headers, "Call-ID")
+                + ", cseq=" + getHeader(headers, "CSeq")
+                + ", from=" + sourceAddr.getHostAddress() + ":" + sourcePort);
         sendResponse(headers, 200, "OK", sourceAddr, sourcePort);
+        resetCallState();
         for (SipEventListener l : listeners) l.onCallEnded();
     }
 
@@ -605,6 +1127,16 @@ public class SipClient {
         hdrs.put("User-Agent", "SipVideoChat-Android");
 
         String resp = buildSipMessage("SIP/2.0 " + code + " " + reason, hdrs, null, null);
+        Log.i(TAG, "Send SIP response code=" + code
+                + ", reason=" + reason
+                + ", callId=" + callId
+                + ", cseq=" + cseq
+                + ", target=" + addr.getHostAddress() + ":" + port);
+        DiagnosticLog.i(TAG, "send response code=" + code
+                + ", reason=" + reason
+                + ", callId=" + callId
+                + ", cseq=" + cseq
+                + ", target=" + addr.getHostAddress() + ":" + port);
         sendTo(resp, addr, port);
     }
 
@@ -626,6 +1158,64 @@ public class SipClient {
         if (registerTimeoutFuture != null) {
             registerTimeoutFuture.cancel(false);
             registerTimeoutFuture = null;
+        }
+    }
+
+    private synchronized void scheduleInviteTimeout(String callId, int cseq, String targetUser) {
+        cancelInviteTimeout();
+        inviteTimeoutFuture = scheduler.schedule(() -> {
+            if (!Objects.equals(currentCallId, callId) || !outgoingInvitePending || inCall) {
+                return;
+            }
+            String reason = currentInvitePacketBytes > MAX_SAFE_UDP_SIP_BYTES
+                    ? "Invite timeout (possible UDP fragmentation)"
+                    : "Invite timeout (no provisional response)";
+            Log.w(TAG, "INVITE timeout target=" + targetUser
+                    + ", callId=" + callId
+                    + ", cseq=" + cseq
+                    + ", timeoutMs=" + INVITE_TIMEOUT_MS
+                    + ", packetBytes=" + currentInvitePacketBytes
+                    + ", bodyBytes=" + currentInviteBodyBytes
+                    + ", video=" + currentInviteVideo
+                    + ", classifiedReason=" + reason);
+            DiagnosticLog.e(TAG, "invite timeout target=" + targetUser
+                    + ", callId=" + callId
+                    + ", cseq=" + cseq
+                    + ", packetBytes=" + currentInvitePacketBytes
+                    + ", bodyBytes=" + currentInviteBodyBytes
+                    + ", video=" + currentInviteVideo
+                    + ", reason=" + reason);
+            outgoingInvitePending = false;
+            for (SipEventListener listener : listeners) {
+                listener.onCallFailed(reason);
+            }
+            resetCallState();
+        }, INVITE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private synchronized void cancelInviteTimeout() {
+        if (inviteTimeoutFuture != null) {
+            inviteTimeoutFuture.cancel(false);
+            inviteTimeoutFuture = null;
+        }
+    }
+
+    private void scheduleMessageTimeout(OutgoingMessageTx tx) {
+        cancelMessageTimeout(tx);
+        tx.timeoutFuture = scheduler.schedule(() -> {
+            OutgoingMessageTx pending = pendingMessageTx.remove(tx.callId);
+            if (pending == null) {
+                return;
+            }
+            Log.w(TAG, "MESSAGE timeout, callId=" + tx.callId + ", messageId=" + tx.messageId);
+            notifyMessageStatus(tx.messageId, Message.MessageStatus.FAILED, "Message timeout");
+        }, MESSAGE_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+    }
+
+    private void cancelMessageTimeout(OutgoingMessageTx tx) {
+        if (tx.timeoutFuture != null) {
+            tx.timeoutFuture.cancel(false);
+            tx.timeoutFuture = null;
         }
     }
 
@@ -651,6 +1241,24 @@ public class SipClient {
     }
 
     // ============== 閺嬪嫬缂?SIP 濞戝牊浼?==============
+
+    private void resetCallState() {
+        cancelInviteTimeout();
+        inCall = false;
+        outgoingInvitePending = false;
+        currentCallId = null;
+        currentFromTag = null;
+        currentToTag = null;
+        currentInviteBranch = null;
+        currentInviteVideo = false;
+        currentInviteBodyBytes = 0;
+        currentInvitePacketBytes = 0;
+        remoteContact = null;
+        currentRemoteUri = null;
+        currentLocalCseq = 1;
+        lastInviteFailureKey = null;
+        pendingIncomingInvite = null;
+    }
 
     private String buildRegisterRequest(int expires, String callId, int cseq, String authHeader) {
         LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
@@ -708,10 +1316,11 @@ public class SipClient {
         try {
             DatagramSocket s = socket;
             int localPort = (s != null) ? s.getLocalPort() : -1;
+            byte[] data = msg.getBytes("UTF-8");
             Log.d(TAG, ">> " + msg.split("\r\n")[0]
                     + " via local " + config.getLocalIp() + ":" + localPort
-                    + " to " + config.getSipServerHost() + ":" + config.getSipServerPort());
-            byte[] data = msg.getBytes("UTF-8");
+                    + " to " + config.getSipServerHost() + ":" + config.getSipServerPort()
+                    + " bytes=" + data.length);
             InetAddress addr = InetAddress.getByName(config.getSipServerHost());
             if (s != null && !s.isClosed()) {
                 s.send(new DatagramPacket(data, data.length, addr, config.getSipServerPort()));
@@ -723,8 +1332,8 @@ public class SipClient {
 
     private void sendTo(String msg, InetAddress addr, int port) {
         try {
-            Log.d(TAG, ">> " + msg.split("\r\n")[0] + " to " + addr + ":" + port);
             byte[] data = msg.getBytes("UTF-8");
+            Log.d(TAG, ">> " + msg.split("\r\n")[0] + " to " + addr + ":" + port + " bytes=" + data.length);
             DatagramSocket s = socket;
             if (s != null && !s.isClosed()) {
                 s.send(new DatagramPacket(data, data.length, addr, port));
@@ -826,6 +1435,267 @@ public class SipClient {
         }
     }
 
+    private long resolveRegisterExpiresSeconds(Map<String, String> headers) {
+        String expiresHeader = getHeader(headers, "Expires");
+        long expires = parseLong(expiresHeader, -1L);
+        if (expires > 0L) {
+            return expires;
+        }
+
+        String contactHeader = getHeader(headers, "Contact");
+        if (contactHeader != null) {
+            Matcher matcher = Pattern.compile("(?i)(?:^|;)\\s*expires\\s*=\\s*\"?(\\d+)\"?").matcher(contactHeader);
+            if (matcher.find()) {
+                return parseLong(matcher.group(1), 120L);
+            }
+        }
+        return 120L;
+    }
+
+    public boolean isRegistrationAlive() {
+        if (!registered.get()) {
+            return false;
+        }
+        if (registrationExpiresAtMs <= 0L) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        boolean alive = now < registrationExpiresAtMs - 5_000L;
+        if (!alive) {
+            registered.set(false);
+        }
+        return alive;
+    }
+
+    private long parseLong(String value, long fallback) {
+        if (value == null || value.trim().isEmpty()) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private void cacheUserContact(String username, String contactHeader) {
+        if (username == null || username.trim().isEmpty() || contactHeader == null || contactHeader.trim().isEmpty()) {
+            return;
+        }
+        String contactUri = extractSipUri(contactHeader);
+        HostPort hostPort = extractHostPort(contactUri);
+        if (hostPort == null) {
+            return;
+        }
+        userContacts.put(username, hostPort.host + ":" + hostPort.port);
+        Log.i(TAG, "Cached contact user=" + username + ", host=" + hostPort.host + ", port=" + hostPort.port);
+    }
+
+    private HostPort extractHostPort(String sipUri) {
+        if (sipUri == null || sipUri.isEmpty()) {
+            return null;
+        }
+        int sipIndex = sipUri.indexOf("sip:");
+        String value = sipIndex >= 0 ? sipUri.substring(sipIndex + 4) : sipUri;
+        int atIndex = value.indexOf('@');
+        if (atIndex >= 0) {
+            value = value.substring(atIndex + 1);
+        }
+        int semicolonIndex = value.indexOf(';');
+        if (semicolonIndex >= 0) {
+            value = value.substring(0, semicolonIndex);
+        }
+        int greaterThanIndex = value.indexOf('>');
+        if (greaterThanIndex >= 0) {
+            value = value.substring(0, greaterThanIndex);
+        }
+        value = value.trim();
+        if (value.isEmpty()) {
+            return null;
+        }
+        int colonIndex = value.lastIndexOf(':');
+        if (colonIndex <= 0 || colonIndex >= value.length() - 1) {
+            return new HostPort(value, config.getSipServerPort());
+        }
+        String host = value.substring(0, colonIndex);
+        int port = (int) parseLong(value.substring(colonIndex + 1), config.getSipServerPort());
+        return new HostPort(host, port);
+    }
+
+    private void sendCancelForPendingInvite() throws Exception {
+        if (currentCallId == null || currentRemoteUri == null || currentInviteBranch == null) {
+            return;
+        }
+
+        LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
+        hdrs.put("Via", "SIP/2.0/UDP " + config.getLocalIp() + ":" + config.getLocalSipPort() + ";branch=" + currentInviteBranch + ";rport");
+        hdrs.put("Max-Forwards", "70");
+        hdrs.put("From", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">;tag=" + currentFromTag);
+        hdrs.put("To", "<" + currentRemoteUri + ">" + (currentToTag != null ? ";tag=" + currentToTag : ""));
+        hdrs.put("Call-ID", currentCallId);
+        hdrs.put("CSeq", "1 CANCEL");
+        hdrs.put("User-Agent", "SipVideoChat-Android");
+
+        String msg = buildSipMessage("CANCEL " + currentRemoteUri + " SIP/2.0", hdrs, null, null);
+        send(msg);
+    }
+
+    private String normalizeSdpBody(String sdp) {
+        if (sdp == null) {
+            return "";
+        }
+        String normalized = sdp.replace("\r\n", "\n").replace('\r', '\n').replace("\n", "\r\n");
+        if (!normalized.endsWith("\r\n")) {
+            normalized += "\r\n";
+        }
+        return normalized;
+    }
+
+    private String publishWebRtcSdp(String sdp, String callId, String direction) throws Exception {
+        LocalMediaServer mediaServer = LocalMediaServer.peek();
+        if (mediaServer == null) {
+            throw new IllegalStateException("Local media server unavailable");
+        }
+        String normalized = normalizeSdpBody(sdp);
+        String fileName = "webrtc-" + (callId != null ? callId : uuid()) + "-" + direction + ".sdp";
+        String url = mediaServer.saveText(normalized, fileName, "application/sdp");
+        Log.i(TAG, "Published WebRTC SDP direction=" + direction
+                + ", callId=" + callId
+                + ", sdpLength=" + utf8Length(normalized)
+                + ", url=" + url);
+        DiagnosticLog.i(TAG, "published webrtc sdp direction=" + direction
+                + ", callId=" + callId
+                + ", sdpLength=" + utf8Length(normalized)
+                + ", url=" + url);
+        return url;
+    }
+
+    private String fetchRemoteWebRtcSdp(String sdpUrl) throws Exception {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(sdpUrl);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setConnectTimeout(REMOTE_SDP_FETCH_TIMEOUT_MS);
+            connection.setReadTimeout(REMOTE_SDP_FETCH_TIMEOUT_MS);
+            connection.setRequestMethod("GET");
+            connection.connect();
+            int statusCode = connection.getResponseCode();
+            if (statusCode < 200 || statusCode >= 300) {
+                throw new IllegalStateException("HTTP " + statusCode);
+            }
+            try (InputStream inputStream = connection.getInputStream();
+                 ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[4096];
+                int read;
+                while ((read = inputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, read);
+                }
+                String sdp = normalizeSdpBody(outputStream.toString("UTF-8"));
+                Log.i(TAG, "Fetched remote WebRTC SDP url=" + sdpUrl
+                        + ", sdpLength=" + utf8Length(sdp));
+                DiagnosticLog.i(TAG, "fetched remote webrtc sdp url=" + sdpUrl
+                        + ", sdpLength=" + utf8Length(sdp));
+                return sdp;
+            }
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private String buildVideoSignalSdp(String sdpUrl) {
+        String base = normalizeSdpBody(buildSDP(true));
+        StringBuilder builder = new StringBuilder(base != null ? base : "");
+        builder.append("a=x-sipvideochat-call-type:").append(CALL_TYPE_VIDEO).append("\r\n");
+        if (sdpUrl != null && !sdpUrl.trim().isEmpty()) {
+            builder.append("a=x-sipvideochat-sdp-url:").append(sdpUrl).append("\r\n");
+        }
+        return builder.toString();
+    }
+
+    private String extractWebRtcSdpUrlFromBody(String sdp) {
+        return extractCustomSdpAttribute(sdp, "x-sipvideochat-sdp-url");
+    }
+
+    private String extractCallTypeFromBody(String sdp) {
+        return extractCustomSdpAttribute(sdp, "x-sipvideochat-call-type");
+    }
+
+    private String extractCustomSdpAttribute(String sdp, String attributeName) {
+        if (sdp == null || attributeName == null || attributeName.isEmpty()) {
+            return null;
+        }
+        String normalized = normalizeSdpBody(sdp);
+        if (normalized == null || normalized.isEmpty()) {
+            return null;
+        }
+        String prefix = "a=" + attributeName + ":";
+        String[] lines = normalized.split("\r\n");
+        for (String line : lines) {
+            if (line.startsWith(prefix)) {
+                String value = line.substring(prefix.length()).trim();
+                return value.isEmpty() ? null : value;
+            }
+        }
+        return null;
+    }
+
+    private String firstNonEmpty(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.trim().isEmpty()) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private String firstSdpLine(String sdp) {
+        if (sdp == null || sdp.isEmpty()) {
+            return "";
+        }
+        int lineEnd = sdp.indexOf("\r\n");
+        return lineEnd >= 0 ? sdp.substring(0, lineEnd) : sdp;
+    }
+
+    private int utf8Length(String value) {
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return value.getBytes("UTF-8").length;
+        } catch (Exception e) {
+            return value.length();
+        }
+    }
+
+    private boolean isSupportedInviteContentType(String contentType) {
+        if (contentType == null || contentType.trim().isEmpty()) {
+            return false;
+        }
+        return contentType.toLowerCase(Locale.US).startsWith("application/sdp");
+    }
+
+    private InviteSdpInfo inspectInviteSdp(String sdp) {
+        InviteSdpInfo info = new InviteSdpInfo();
+        if (sdp == null || sdp.trim().isEmpty()) {
+            info.parseResult = "empty body";
+            return info;
+        }
+        String normalized = normalizeSdpBody(sdp);
+        info.hasAudio = normalized.contains("\r\nm=audio ") || normalized.startsWith("m=audio ");
+        info.hasVideo = normalized.contains("\r\nm=video ") || normalized.startsWith("m=video ");
+        boolean hasVersion = normalized.startsWith("v=0\r\n");
+        boolean hasOrigin = normalized.contains("\r\no=") || normalized.startsWith("o=");
+        boolean hasTiming = normalized.contains("\r\nt=") || normalized.startsWith("t=");
+        info.valid = hasVersion && hasOrigin && hasTiming && info.hasAudio;
+        info.parseResult = info.valid ? "ok" : "missing required SDP lines";
+        return info;
+    }
+
     private String branch() {
         return "z9hG4bK" + UUID.randomUUID().toString().replace("-", "");
     }
@@ -908,7 +1778,10 @@ public class SipClient {
     // ============== Getters ==============
 
     public boolean isRegistered() { return registered.get(); }
+    public long getLastRegisterSuccessAtMs() { return lastRegisterSuccessAtMs; }
+    public long getRegistrationExpiresAtMs() { return registrationExpiresAtMs; }
     public boolean isInCall() { return inCall; }
+    public String getCurrentCallId() { return currentCallId; }
     public ClientConfig getConfig() { return config; }
     public Set<String> getKnownContacts() { return new HashSet<>(userContacts.keySet()); }
 
@@ -921,6 +1794,7 @@ public class SipClient {
         final String messageId;
         int cseq = 1;
         boolean retriedAsTextPlain = false;
+        ScheduledFuture<?> timeoutFuture;
 
         OutgoingMessageTx(String callId, String fromTag, String targetUser, String requestUri, String bodyJson,
                           String messageId) {
@@ -944,8 +1818,26 @@ public class SipClient {
         public String fromHeader;
         public String toHeader;
         public String toTag;
+        public String contactHeader;
         public InetAddress sourceAddress;
         public int sourcePort;
+    }
+
+    private static class HostPort {
+        final String host;
+        final int port;
+
+        HostPort(String host, int port) {
+            this.host = host;
+            this.port = port;
+        }
+    }
+
+    private static class InviteSdpInfo {
+        boolean valid;
+        boolean hasAudio;
+        boolean hasVideo;
+        String parseResult = "not parsed";
     }
 }
 

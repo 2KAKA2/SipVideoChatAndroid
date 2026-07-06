@@ -1,37 +1,41 @@
 package com.sipvideochat.media;
 
 import android.media.MediaCodec;
-import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.util.Log;
 import android.view.Surface;
+
+import com.sipvideochat.util.DiagnosticLog;
 
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.SocketTimeoutException;
 import java.nio.ByteBuffer;
 
-/**
- * RTP视频接收器（Android版本）
- * 替代桌面端 FFmpegFrameGrabber → DatagramSocket 接收 + RTP 解包 + MediaCodec 解码
- *
- * 支持 VP8 RTP 解包 (RFC 7741)
- */
 public class RTPVideoReceiver extends Thread {
     private static final String TAG = "RTPVideoReceiver";
+    private static final long MIN_FRAME_INTERVAL_US = 30_000L;
 
-    private int localPort;
+    private final int localPort;
     private DatagramSocket socket;
     private MediaCodec decoder;
-    private volatile boolean running = false;
+    private volatile boolean running;
     private Surface outputSurface;
-
-    private boolean useVP8 = true; // 与发送端匹配
-
-    // VP8 帧重组缓冲区
-    private byte[] frameBuffer = new byte[200000]; // 200KB max frame
-    private int frameBufferPos = 0;
+    private byte[] frameBuffer = new byte[200_000];
+    private int frameBufferPos;
     private long currentTimestamp = -1;
+    private int decoderWidth;
+    private int decoderHeight;
+    private long baseRtpTimestamp = -1L;
+    private long lastQueuedPtsUs = -1L;
+    private int lastSequenceNumber = -1;
+    private boolean awaitingFrameStart = true;
+    private boolean dropCurrentFrame;
+    private long packetsReceived;
+    private long framesQueued;
+    private long framesRendered;
+    private long keyFramesDetected;
+    private long incompleteFramesDropped;
 
     public interface VideoFrameListener {
         void onError(String error);
@@ -49,9 +53,6 @@ public class RTPVideoReceiver extends Thread {
         this.listener = listener;
     }
 
-    /**
-     * 设置解码输出的 Surface（来自 SurfaceView）
-     */
     public void setOutputSurface(Surface surface) {
         this.outputSurface = surface;
     }
@@ -59,15 +60,11 @@ public class RTPVideoReceiver extends Thread {
     @Override
     public void run() {
         running = true;
-
         try {
             socket = new DatagramSocket(localPort);
             socket.setSoTimeout(5000);
-
-            // 初始化解码器
-            initDecoder();
-
-            Log.i(TAG, "视频接收启动，端口: " + localPort);
+            Log.i(TAG, "Video receiver started on " + localPort + " VP8");
+            DiagnosticLog.i(TAG, "video receiver started localPort=" + localPort + ", codec=VP8");
 
             byte[] buffer = new byte[2000];
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
@@ -76,230 +73,343 @@ public class RTPVideoReceiver extends Thread {
                 try {
                     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
                     socket.receive(packet);
+                    processVp8Packet(packet.getData(), packet.getLength());
 
-                    processRtpPacket(packet.getData(), packet.getLength());
-
-                    // 尝试读取解码输出
-                    int outputIndex;
-                    while ((outputIndex = decoder.dequeueOutputBuffer(info, 0)) >= 0) {
-                        // 直接渲染到 Surface
-                        decoder.releaseOutputBuffer(outputIndex, true);
+                    if (decoder == null) {
+                        continue;
                     }
 
-                } catch (SocketTimeoutException e) {
-                    // 正常超时
+                    int outputIndex;
+                    int latestOutputIndex = -1;
+                    while ((outputIndex = decoder.dequeueOutputBuffer(info, 0)) >= 0) {
+                        if (latestOutputIndex >= 0) {
+                            decoder.releaseOutputBuffer(latestOutputIndex, false);
+                        }
+                        latestOutputIndex = outputIndex;
+                    }
+                    if (latestOutputIndex >= 0) {
+                        decoder.releaseOutputBuffer(latestOutputIndex, true);
+                        framesRendered++;
+                        if (framesRendered == 1 || framesRendered % 60 == 0) {
+                            DiagnosticLog.i(TAG, "rendered vp8 frames=" + framesRendered
+                                    + ", queued=" + framesQueued
+                                    + ", packetsReceived=" + packetsReceived);
+                        }
+                    }
+                    if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        Log.i(TAG, "Video output format changed: " + decoder.getOutputFormat());
+                    }
+                } catch (SocketTimeoutException ignored) {
                 } catch (Exception e) {
                     if (running) {
-                        Log.e(TAG, "视频接收错误: " + e.getMessage());
+                        Log.e(TAG, "Video receive error", e);
+                        DiagnosticLog.e(TAG, "video receive loop error", e);
                     }
                 }
             }
-
         } catch (Exception e) {
-            Log.e(TAG, "视频接收失败", e);
+            Log.e(TAG, "Video receiver failed", e);
+            DiagnosticLog.e(TAG, "video receiver failed", e);
             if (listener != null) {
                 listener.onError(e.getMessage());
             }
         } finally {
-            if (decoder != null) {
-                try {
-                    decoder.stop();
-                    decoder.release();
-                } catch (Exception e) {
-                    Log.e(TAG, "关闭解码器失败", e);
-                }
-                decoder = null;
-            }
+            releaseDecoder();
             if (socket != null && !socket.isClosed()) {
                 socket.close();
             }
-            Log.i(TAG, "视频接收已停止");
+            Log.i(TAG, "Video receiver stopped");
+            DiagnosticLog.i(TAG, "video receiver stopped localPort=" + localPort
+                    + ", packetsReceived=" + packetsReceived
+                    + ", framesQueued=" + framesQueued
+                    + ", framesRendered=" + framesRendered
+                    + ", keyFrames=" + keyFramesDetected
+                    + ", incompleteFramesDropped=" + incompleteFramesDropped);
         }
     }
 
-    private void initDecoder() throws Exception {
-        // 尝试 VP8
-        try {
-            String mimeType = "video/x-vnd.on2.vp8";
-            MediaFormat format = MediaFormat.createVideoFormat(mimeType, 320, 240);
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
-                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
-
-            decoder = MediaCodec.createDecoderByType(mimeType);
-            decoder.configure(format, outputSurface, null, 0);
-            decoder.start();
-            useVP8 = true;
-            Log.i(TAG, "使用VP8解码器");
+    private void processVp8Packet(byte[] data, int length) {
+        if (length < 13) {
             return;
-        } catch (Exception e) {
-            Log.w(TAG, "VP8解码器不可用: " + e.getMessage());
+        }
+        packetsReceived++;
+        if (packetsReceived == 1 || packetsReceived % 150 == 0) {
+            DiagnosticLog.i(TAG, "received video packets=" + packetsReceived
+                    + ", localPort=" + localPort
+                    + ", packetBytes=" + length);
         }
 
-        // 回退 H.264
-        String mimeType = "video/avc";
-        MediaFormat format = MediaFormat.createVideoFormat(mimeType, 320, 240);
-        decoder = MediaCodec.createDecoderByType(mimeType);
-        decoder.configure(format, outputSurface, null, 0);
-        decoder.start();
-        useVP8 = false;
-        Log.i(TAG, "使用H.264解码器");
-    }
-
-    /**
-     * 处理 RTP 包，解包后送入解码器
-     */
-    private void processRtpPacket(byte[] data, int length) {
-        if (length < 12) return;
-
-        // 解析 RTP 头
-        boolean marker = (data[1] & 0x80) != 0;
-        int payloadType = data[1] & 0x7F;
-        int seqNum = ((data[2] & 0xFF) << 8) | (data[3] & 0xFF);
-        long rtpTimestamp = ((long)(data[4] & 0xFF) << 24) | ((data[5] & 0xFF) << 16) |
-                ((data[6] & 0xFF) << 8) | (data[7] & 0xFF);
-
-        int headerLen = 12;
-        int cc = data[0] & 0x0F;
-        headerLen += cc * 4;
-
-        // 扩展头
-        if ((data[0] & 0x10) != 0 && length >= headerLen + 4) {
-            int extLen = ((data[headerLen + 2] & 0xFF) << 8) | (data[headerLen + 3] & 0xFF);
-            headerLen += 4 + extLen * 4;
-        }
-
-        if (length <= headerLen) return;
-
-        if (useVP8) {
-            processVP8Payload(data, headerLen, length, rtpTimestamp, marker);
-        } else {
-            processH264Payload(data, headerLen, length, rtpTimestamp, marker);
-        }
-    }
-
-    /**
-     * VP8 RTP 解包
-     */
-    private void processVP8Payload(byte[] data, int offset, int length, long rtpTimestamp, boolean marker) {
-        // VP8 payload descriptor (至少1字节)
-        if (offset >= length) return;
-
-        byte desc = data[offset];
-        boolean startOfPartition = (desc & 0x10) != 0; // S bit
-        offset++;
-
-        // 扩展标志
-        if ((desc & 0x80) != 0) { // X bit
-            if (offset >= length) return;
-            byte xByte = data[offset];
-            offset++;
-            if ((xByte & 0x80) != 0) offset++; // I bit (PictureID)
-            if ((xByte & 0x40) != 0) offset++; // L bit (TL0PICIDX)
-            if ((xByte & 0x20) != 0 || (xByte & 0x10) != 0) offset++; // T/K bits
-        }
-
-        if (offset >= length) return;
-
-        // 新帧开始
-        if (currentTimestamp != rtpTimestamp) {
-            // 如果有上一帧数据，先送入解码器
-            if (frameBufferPos > 0 && currentTimestamp >= 0) {
-                feedDecoder(frameBuffer, frameBufferPos, currentTimestamp);
+        int payloadEnd = length;
+        if ((data[0] & 0x20) != 0) {
+            int paddingLength = data[length - 1] & 0xFF;
+            if (paddingLength <= 0 || paddingLength >= length) {
+                return;
             }
-            frameBufferPos = 0;
+            payloadEnd -= paddingLength;
+        }
+
+        int rtpHeaderLength = 12 + ((data[0] & 0x0F) * 4);
+        if (rtpHeaderLength >= payloadEnd) {
+            return;
+        }
+        if ((data[0] & 0x10) != 0) {
+            if (rtpHeaderLength + 4 > payloadEnd) {
+                return;
+            }
+            int extensionLengthWords = ((data[rtpHeaderLength + 2] & 0xFF) << 8)
+                    | (data[rtpHeaderLength + 3] & 0xFF);
+            rtpHeaderLength += 4 + extensionLengthWords * 4;
+            if (rtpHeaderLength >= payloadEnd) {
+                return;
+            }
+        }
+
+        boolean marker = (data[1] & 0x80) != 0;
+        int sequenceNumber = ((data[2] & 0xFF) << 8) | (data[3] & 0xFF);
+        long rtpTimestamp = ((long) (data[4] & 0xFF) << 24)
+                | ((long) (data[5] & 0xFF) << 16)
+                | ((long) (data[6] & 0xFF) << 8)
+                | (data[7] & 0xFF);
+        boolean startOfPartition = (data[rtpHeaderLength] & 0x10) != 0;
+
+        int offset = parseVp8PayloadOffset(data, rtpHeaderLength, payloadEnd);
+        if (offset < 0 || offset >= payloadEnd) {
+            return;
+        }
+
+        if (currentTimestamp != rtpTimestamp) {
+            if (frameBufferPos > 0 && currentTimestamp >= 0 && !dropCurrentFrame) {
+                feedDecoder(frameBuffer, frameBufferPos, currentTimestamp);
+            } else if (frameBufferPos > 0 || dropCurrentFrame) {
+                incompleteFramesDropped++;
+            }
             currentTimestamp = rtpTimestamp;
+            frameBufferPos = 0;
+            awaitingFrameStart = true;
+            dropCurrentFrame = false;
+        } else if (!awaitingFrameStart
+                && !dropCurrentFrame
+                && lastSequenceNumber >= 0
+                && sequenceNumber != ((lastSequenceNumber + 1) & 0xFFFF)) {
+            dropCurrentFrame = true;
+            incompleteFramesDropped++;
+            frameBufferPos = 0;
+            if (incompleteFramesDropped == 1 || incompleteFramesDropped % 20 == 0) {
+                DiagnosticLog.w(TAG, "dropping incomplete vp8 frame due to sequence gap"
+                        + ", expected=" + (((lastSequenceNumber + 1) & 0xFFFF))
+                        + ", actual=" + sequenceNumber
+                        + ", timestamp=" + rtpTimestamp
+                        + ", dropped=" + incompleteFramesDropped);
+            }
         }
 
-        // 追加 payload 数据
-        int payloadLen = length - offset;
-        if (frameBufferPos + payloadLen < frameBuffer.length) {
-            System.arraycopy(data, offset, frameBuffer, frameBufferPos, payloadLen);
-            frameBufferPos += payloadLen;
+        if (awaitingFrameStart) {
+            if (!startOfPartition) {
+                dropCurrentFrame = true;
+                lastSequenceNumber = sequenceNumber;
+                if (marker) {
+                    resetFrameAssembly();
+                }
+                return;
+            }
+            awaitingFrameStart = false;
         }
 
-        // Marker = 帧的最后一个包
+        if (dropCurrentFrame) {
+            lastSequenceNumber = sequenceNumber;
+            if (marker) {
+                resetFrameAssembly();
+            }
+            return;
+        }
+
+        int payloadLength = payloadEnd - offset;
+        if (frameBufferPos + payloadLength > frameBuffer.length) {
+            incompleteFramesDropped++;
+            resetFrameAssembly();
+            lastSequenceNumber = sequenceNumber;
+            return;
+        }
+        System.arraycopy(data, offset, frameBuffer, frameBufferPos, payloadLength);
+        frameBufferPos += payloadLength;
+        lastSequenceNumber = sequenceNumber;
+
         if (marker && frameBufferPos > 0) {
             feedDecoder(frameBuffer, frameBufferPos, currentTimestamp);
-            frameBufferPos = 0;
+            resetFrameAssembly();
         }
     }
 
-    /**
-     * H.264 RTP 解包
-     */
-    private void processH264Payload(byte[] data, int offset, int length, long rtpTimestamp, boolean marker) {
-        if (offset >= length) return;
-
-        byte naluByte = data[offset];
-        int naluType = naluByte & 0x1F;
-
-        if (naluType >= 1 && naluType <= 23) {
-            // 单NALU包
-            int payloadLen = length - offset;
-            byte[] nalu = new byte[4 + payloadLen]; // 起始码 + NALU
-            nalu[0] = 0; nalu[1] = 0; nalu[2] = 0; nalu[3] = 1;
-            System.arraycopy(data, offset, nalu, 4, payloadLen);
-            feedDecoder(nalu, nalu.length, rtpTimestamp);
-
-        } else if (naluType == 28) {
-            // FU-A
-            if (offset + 1 >= length) return;
-            byte fuHeader = data[offset + 1];
-            boolean fuStart = (fuHeader & 0x80) != 0;
-            boolean fuEnd = (fuHeader & 0x40) != 0;
-            int fuNaluType = fuHeader & 0x1F;
-
-            if (fuStart) {
-                frameBufferPos = 0;
-                // 写起始码 + 重构的NALU header
-                frameBuffer[0] = 0; frameBuffer[1] = 0; frameBuffer[2] = 0; frameBuffer[3] = 1;
-                frameBuffer[4] = (byte) ((naluByte & 0xE0) | fuNaluType);
-                frameBufferPos = 5;
-            }
-
-            int payloadLen = length - offset - 2;
-            if (frameBufferPos + payloadLen < frameBuffer.length) {
-                System.arraycopy(data, offset + 2, frameBuffer, frameBufferPos, payloadLen);
-                frameBufferPos += payloadLen;
-            }
-
-            if (fuEnd && frameBufferPos > 0) {
-                feedDecoder(frameBuffer, frameBufferPos, rtpTimestamp);
-                frameBufferPos = 0;
-            }
-        }
+    private void resetFrameAssembly() {
+        frameBufferPos = 0;
+        currentTimestamp = -1L;
+        awaitingFrameStart = true;
+        dropCurrentFrame = false;
     }
 
-    /**
-     * 将数据送入 MediaCodec 解码器
-     */
     private void feedDecoder(byte[] data, int length, long timestamp) {
         try {
-            int inputIndex = decoder.dequeueInputBuffer(10000);
+            long ptsUs = toPresentationTimeUs(timestamp);
+            if (lastQueuedPtsUs > 0L && ptsUs - lastQueuedPtsUs < MIN_FRAME_INTERVAL_US) {
+                return;
+            }
+
+            int[] size = tryParseVp8KeyFrameSize(data, length);
+            if (size != null) {
+                keyFramesDetected++;
+                if (keyFramesDetected == 1 || keyFramesDetected % 30 == 0) {
+                    DiagnosticLog.i(TAG, "vp8 keyframe detected count=" + keyFramesDetected
+                            + ", size=" + size[0] + "x" + size[1]
+                            + ", frameBytes=" + length);
+                }
+                ensureDecoder(size[0], size[1]);
+            } else if (decoder == null) {
+                if (packetsReceived % 120 == 0) {
+                    DiagnosticLog.w(TAG, "waiting for vp8 keyframe packets=" + packetsReceived
+                            + ", bufferedFrameBytes=" + length);
+                }
+                return;
+            }
+
+            int inputIndex = decoder.dequeueInputBuffer(10_000);
             if (inputIndex >= 0) {
                 ByteBuffer inputBuffer = decoder.getInputBuffer(inputIndex);
                 if (inputBuffer != null) {
                     inputBuffer.clear();
                     inputBuffer.put(data, 0, length);
-                    long pts = timestamp * 1000000 / 90000;
-                    decoder.queueInputBuffer(inputIndex, 0, length, pts, 0);
+                    decoder.queueInputBuffer(inputIndex, 0, length, ptsUs, 0);
+                    lastQueuedPtsUs = ptsUs;
+                    framesQueued++;
+                    if (framesQueued == 1 || framesQueued % 60 == 0) {
+                        DiagnosticLog.i(TAG, "queued vp8 frames=" + framesQueued
+                                + ", ptsUs=" + ptsUs
+                                + ", frameBytes=" + length);
+                    }
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "送入解码器失败: " + e.getMessage());
+            Log.e(TAG, "Failed to queue VP8 frame", e);
+            DiagnosticLog.e(TAG, "failed to queue vp8 frame", e);
         }
     }
 
+    private int parseVp8PayloadOffset(byte[] data, int offset, int payloadEnd) {
+        if (offset >= payloadEnd) {
+            return -1;
+        }
+
+        int descriptor = data[offset++] & 0xFF;
+        if ((descriptor & 0x80) == 0) {
+            return offset;
+        }
+        if (offset >= payloadEnd) {
+            return -1;
+        }
+
+        int extension = data[offset++] & 0xFF;
+        if ((extension & 0x80) != 0) {
+            if (offset >= payloadEnd) {
+                return -1;
+            }
+            int pictureId = data[offset++] & 0xFF;
+            if ((pictureId & 0x80) != 0) {
+                if (offset >= payloadEnd) {
+                    return -1;
+                }
+                offset++;
+            }
+        }
+        if ((extension & 0x40) != 0) {
+            if (offset >= payloadEnd) {
+                return -1;
+            }
+            offset++;
+        }
+        if ((extension & 0x20) != 0 || (extension & 0x10) != 0) {
+            if (offset >= payloadEnd) {
+                return -1;
+            }
+            offset++;
+        }
+        return offset;
+    }
+
+    private void ensureDecoder(int width, int height) throws Exception {
+        if (decoder != null && decoderWidth == width && decoderHeight == height) {
+            return;
+        }
+        releaseDecoder();
+        MediaFormat format = MediaFormat.createVideoFormat("video/x-vnd.on2.vp8", width, height);
+        decoder = MediaCodec.createDecoderByType("video/x-vnd.on2.vp8");
+        decoder.configure(format, outputSurface, null, 0);
+        decoder.start();
+        decoderWidth = width;
+        decoderHeight = height;
+        Log.i(TAG, "Video decoder configured for " + width + "x" + height);
+        DiagnosticLog.i(TAG, "video decoder configured width=" + width + ", height=" + height);
+    }
+
+    private void releaseDecoder() {
+        if (decoder != null) {
+            try {
+                decoder.stop();
+            } catch (Exception ignored) {
+            }
+            try {
+                decoder.release();
+            } catch (Exception ignored) {
+            }
+            decoder = null;
+        }
+        decoderWidth = 0;
+        decoderHeight = 0;
+        baseRtpTimestamp = -1L;
+        lastQueuedPtsUs = -1L;
+        lastSequenceNumber = -1;
+        awaitingFrameStart = true;
+        dropCurrentFrame = false;
+        frameBufferPos = 0;
+        currentTimestamp = -1L;
+    }
+
+    private long toPresentationTimeUs(long rtpTimestamp) {
+        if (baseRtpTimestamp < 0L) {
+            baseRtpTimestamp = rtpTimestamp;
+        }
+        long relativeTicks = rtpTimestamp - baseRtpTimestamp;
+        if (relativeTicks < 0L) {
+            relativeTicks += (1L << 32);
+        }
+        return relativeTicks * 1_000_000L / 90_000L;
+    }
+
+    private int[] tryParseVp8KeyFrameSize(byte[] data, int length) {
+        if (length < 10) {
+            return null;
+        }
+        boolean isKeyFrame = (data[0] & 0x01) == 0;
+        if (!isKeyFrame) {
+            return null;
+        }
+        if ((data[3] & 0xFF) != 0x9D || (data[4] & 0xFF) != 0x01 || (data[5] & 0xFF) != 0x2A) {
+            return null;
+        }
+
+        int width = ((data[7] & 0x3F) << 8) | (data[6] & 0xFF);
+        int height = ((data[9] & 0x3F) << 8) | (data[8] & 0xFF);
+        if (width <= 0 || height <= 0) {
+            return null;
+        }
+        return new int[]{width, height};
+    }
+
     public void stopReceiving() {
+        DiagnosticLog.i(TAG, "stopReceiving requested localPort=" + localPort);
         running = false;
         try {
             join(2000);
         } catch (InterruptedException e) {
             interrupt();
         }
-    }
-
-    public boolean isRunning() {
-        return running;
     }
 }

@@ -20,14 +20,12 @@ public class ChatGroup implements Serializable {
     private List<String> memberIds;
     private List<String> adminIds;
     private int maxMembers;
-    private boolean isConference;
 
     public ChatGroup() {
         this.id = UUID.randomUUID().toString();
         this.memberIds = new ArrayList<>();
         this.adminIds = new ArrayList<>();
         this.maxMembers = 100;
-        this.isConference = false;
     }
 
     public ChatGroup(String name, String ownerId) {
@@ -70,8 +68,8 @@ public class ChatGroup implements Serializable {
     public List<String> getMemberIds() { return memberIds; }
     public void setMemberIds(List<String> memberIds) { this.memberIds = memberIds; }
 
-    public int getMemberCount() { return memberIds.size(); }
+    public List<String> getAdminIds() { return adminIds; }
+    public void setAdminIds(List<String> adminIds) { this.adminIds = adminIds; }
 
-    public boolean isConference() { return isConference; }
-    public void setConference(boolean conference) { isConference = conference; }
+    public int getMemberCount() { return memberIds.size(); }
 }

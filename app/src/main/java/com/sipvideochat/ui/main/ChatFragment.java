@@ -37,9 +37,13 @@ import java.util.List;
  */
 public class ChatFragment extends Fragment {
     private static final String TAG = "ChatFragment";
-    private static final String ARG_USERNAME = "username";
+    private static final String ARG_CONVERSATION_KEY = "conversation_key";
+    private static final String ARG_TITLE = "title";
+    private static final String ARG_IS_GROUP = "is_group";
 
-    private String chatUser;
+    private String conversationKey;
+    private String conversationTitle;
+    private boolean groupConversation;
     private RecyclerView rvMessages;
     private ChatMessageAdapter adapter;
     private TextInputEditText etMessage;
@@ -54,23 +58,32 @@ public class ChatFragment extends Fragment {
     private final ActivityResultLauncher<String> cameraPermissionLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
                 if (granted) {
-                    ((MainActivity) requireActivity()).makeVideoCall(chatUser);
+                    MainActivity activity = (MainActivity) requireActivity();
+                    if (groupConversation) {
+                        activity.makeGroupVideoCall(conversationKey);
+                    } else {
+                        activity.makeVideoCall(conversationKey);
+                    }
                 } else {
-                    showSnackbar("需要摄像头权限才能视频通话");
+                    showSnackbar("Camera permission is required for video calls.");
                 }
             });
 
     private final ActivityResultLauncher<String> audioPermissionLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
                 if (!granted) {
-                    showSnackbar("需要麦克风权限");
+                    showSnackbar("Microphone permission is required.");
                     pendingAudioAction = null;
                     return;
                 }
 
                 MainActivity activity = (MainActivity) requireActivity();
                 if ("audio_call".equals(pendingAudioAction)) {
-                    activity.makeAudioCall(chatUser);
+                    if (groupConversation) {
+                        activity.makeGroupAudioCall(conversationKey);
+                    } else {
+                        activity.makeAudioCall(conversationKey);
+                    }
                 } else if ("video_call".equals(pendingAudioAction)) {
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA);
                 } else if ("voice_record".equals(pendingAudioAction)) {
@@ -85,7 +98,7 @@ public class ChatFragment extends Fragment {
                     return;
                 }
                 takePersistableReadPermission(uri);
-                ((MainActivity) requireActivity()).sendImageMessage(chatUser, uri);
+                ((MainActivity) requireActivity()).sendImageMessage(conversationKey, uri);
             });
 
     private final ActivityResultLauncher<String[]> videoPickerLauncher =
@@ -94,13 +107,15 @@ public class ChatFragment extends Fragment {
                     return;
                 }
                 takePersistableReadPermission(uri);
-                ((MainActivity) requireActivity()).sendVideoMessage(chatUser, uri);
+                ((MainActivity) requireActivity()).sendVideoMessage(conversationKey, uri);
             });
 
-    public static ChatFragment newInstance(String username) {
+    public static ChatFragment newInstance(String conversationKey, String title, boolean isGroup) {
         ChatFragment fragment = new ChatFragment();
         Bundle args = new Bundle();
-        args.putString(ARG_USERNAME, username);
+        args.putString(ARG_CONVERSATION_KEY, conversationKey);
+        args.putString(ARG_TITLE, title);
+        args.putBoolean(ARG_IS_GROUP, isGroup);
         fragment.setArguments(args);
         return fragment;
     }
@@ -109,7 +124,9 @@ public class ChatFragment extends Fragment {
     public void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         if (getArguments() != null) {
-            chatUser = getArguments().getString(ARG_USERNAME);
+            conversationKey = getArguments().getString(ARG_CONVERSATION_KEY);
+            conversationTitle = getArguments().getString(ARG_TITLE);
+            groupConversation = getArguments().getBoolean(ARG_IS_GROUP, false);
         }
     }
 
@@ -127,7 +144,7 @@ public class ChatFragment extends Fragment {
         MainActivity activity = (MainActivity) requireActivity();
 
         TextView tvChatUser = view.findViewById(R.id.tvChatUser);
-        tvChatUser.setText(chatUser);
+        tvChatUser.setText(conversationTitle);
 
         ImageButton btnBack = view.findViewById(R.id.btnBack);
         btnBack.setOnClickListener(v -> {
@@ -136,12 +153,12 @@ public class ChatFragment extends Fragment {
         });
 
         ImageButton btnAudioCall = view.findViewById(R.id.btnAudioCall);
+        ImageButton btnVideoCall = view.findViewById(R.id.btnVideoCall);
         btnAudioCall.setOnClickListener(v -> {
             pendingAudioAction = "audio_call";
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO);
         });
 
-        ImageButton btnVideoCall = view.findViewById(R.id.btnVideoCall);
         btnVideoCall.setOnClickListener(v -> {
             pendingAudioAction = "video_call";
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO);
@@ -158,7 +175,7 @@ public class ChatFragment extends Fragment {
         updateVoiceButtonState();
 
         rvMessages = view.findViewById(R.id.rvMessages);
-        messages = new ArrayList<>(activity.getChatHistory(chatUser));
+        messages = new ArrayList<>(activity.getChatHistory(conversationKey));
         adapter = new ChatMessageAdapter(messages, activity.getMyUsername());
         LinearLayoutManager layoutManager = new LinearLayoutManager(requireContext());
         layoutManager.setStackFromEnd(true);
@@ -179,7 +196,7 @@ public class ChatFragment extends Fragment {
         });
 
         activity.getMessageEventsLiveData().observe(getViewLifecycleOwner(), event -> {
-            if (event == null || !chatUser.equals(event.contactUser)) {
+            if (event == null || !conversationKey.equals(event.contactUser)) {
                 return;
             }
 
@@ -204,7 +221,7 @@ public class ChatFragment extends Fragment {
             return;
         }
 
-        ((MainActivity) requireActivity()).sendTextMessage(chatUser, text);
+        ((MainActivity) requireActivity()).sendTextMessage(conversationKey, text);
         etMessage.setText("");
     }
 
@@ -238,11 +255,11 @@ public class ChatFragment extends Fragment {
 
             isRecording = true;
             updateVoiceButtonState();
-            Toast.makeText(requireContext(), "录音中，再点一次发送", Toast.LENGTH_SHORT).show();
+            Toast.makeText(requireContext(), "Recording started. Tap again to send.", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             Log.e(TAG, "Failed to start voice recording", e);
             releaseRecorder();
-            showSnackbar("开始录音失败");
+            showSnackbar("Failed to start recording.");
         }
     }
 
@@ -255,10 +272,10 @@ public class ChatFragment extends Fragment {
             mediaRecorder.stop();
             int durationSeconds = Math.max(1, (int) ((System.currentTimeMillis() - recordingStartTimeMs) / 1000L));
             Uri uri = Uri.fromFile(new File(recordingFilePath));
-            ((MainActivity) requireActivity()).sendVoiceMessage(chatUser, uri, durationSeconds);
+            ((MainActivity) requireActivity()).sendVoiceMessage(conversationKey, uri, durationSeconds);
         } catch (Exception e) {
             Log.e(TAG, "Failed to stop/send voice recording", e);
-            showSnackbar("发送语音失败");
+            showSnackbar("Failed to send voice message.");
         } finally {
             releaseRecorder();
             updateVoiceButtonState();
@@ -283,7 +300,9 @@ public class ChatFragment extends Fragment {
         btnVoiceMessage.setImageResource(isRecording
                 ? android.R.drawable.ic_media_pause
                 : android.R.drawable.ic_btn_speak_now);
-        btnVoiceMessage.setContentDescription(isRecording ? "停止并发送语音" : "录制语音消息");
+        btnVoiceMessage.setContentDescription(isRecording
+                ? "Stop and send voice message"
+                : "Record voice message");
     }
 
     private void takePersistableReadPermission(Uri uri) {
