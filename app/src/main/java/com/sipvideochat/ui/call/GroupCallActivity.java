@@ -110,7 +110,7 @@ public class GroupCallActivity extends AppCompatActivity {
             SipService.SipBinder binder = (SipService.SipBinder) service;
             sipService = binder.getService();
             serviceBound = true;
-            sipService.setEventListener(sipEventListener);
+            sipService.addEventListener(sipEventListener);
             maybeStartRoom();
         }
 
@@ -138,6 +138,7 @@ public class GroupCallActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
+        ActiveCallGuard.markActive();
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_group_call);
 
@@ -171,6 +172,7 @@ public class GroupCallActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        ActiveCallGuard.markInactive();
         super.onDestroy();
         releaseResources(false);
     }
@@ -566,7 +568,7 @@ public class GroupCallActivity extends AppCompatActivity {
         restoreAudioRoute();
         if (serviceBound) {
             if (clearListener && sipService != null) {
-                sipService.setEventListener(null);
+                sipService.removeEventListener(sipEventListener);
             }
             unbindService(serviceConnection);
             serviceBound = false;

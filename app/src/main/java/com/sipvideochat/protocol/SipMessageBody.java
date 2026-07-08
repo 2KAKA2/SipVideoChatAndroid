@@ -1,12 +1,6 @@
 package com.sipvideochat.protocol;
 
-/**
- * SIP MESSAGE娑堟伅浣?- JSON鏍煎紡
- * 鐢ㄤ簬鏂囧瓧銆佸浘鐗囥€佽闊炽€佽棰戞秷鎭互鍙婄兢鑱婁俊浠?
- * (浠庢闈㈢ src/protocol/SipMessageBody.java 绉绘)
- */
 public class SipMessageBody {
-    // 娑堟伅鍔ㄤ綔绫诲瀷
     public static final String ACTION_CHAT = "CHAT";
     public static final String ACTION_JOIN = "JOIN";
     public static final String ACTION_WELCOME = "WELCOME";
@@ -18,7 +12,6 @@ public class SipMessageBody {
     public static final String ACTION_WEBRTC_ANSWER = "WEBRTC_ANSWER";
     public static final String ACTION_WEBRTC_ICE = "WEBRTC_ICE";
 
-    // 娑堟伅鍐呭绫诲瀷
     public static final String MSG_TYPE_TEXT = "text";
     public static final String MSG_TYPE_IMAGE = "image";
     public static final String MSG_TYPE_VOICE = "voice";
@@ -40,7 +33,6 @@ public class SipMessageBody {
     private String iceSdpMid;
     private int iceSdpMLineIndex;
 
-    // 娑堟伅鍐呭
     private String msgType;
     private String msgContent;
     private String groupName;
@@ -58,7 +50,6 @@ public class SipMessageBody {
         this.timestamp = System.currentTimeMillis();
     }
 
-    // ============== 宸ュ巶鏂规硶 ==============
 
     public static SipMessageBody createTextMessage(String fromUser, String toUser, String content) {
         SipMessageBody body = new SipMessageBody();
@@ -202,7 +193,6 @@ public class SipMessageBody {
         return body;
     }
 
-    // ============== 搴忓垪鍖?鍙嶅簭鍒楀寲 ==============
 
     public String toJson() {
         StringBuilder sb = new StringBuilder();

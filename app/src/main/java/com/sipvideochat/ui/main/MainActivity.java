@@ -3,7 +3,6 @@ package com.sipvideochat.ui.main;
 import android.Manifest;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -42,6 +41,7 @@ import com.sipvideochat.protocol.SipMessageBody;
 import com.sipvideochat.sip.SipClient;
 import com.sipvideochat.sip.SipEventListener;
 import com.sipvideochat.sip.SipService;
+import com.sipvideochat.ui.call.ActiveCallGuard;
 import com.sipvideochat.ui.call.CallActivity;
 import com.sipvideochat.ui.call.GroupCallActivity;
 import com.sipvideochat.util.DiagnosticLog;
@@ -66,6 +66,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String GROUP_KEY_PREFIX = "group:";
     private static final String CONTACT_REQUEST_PREFIX = "[[CONTACT_REQUEST]]";
     private static final String CONTACT_ACCEPT_PREFIX = "[[CONTACT_ACCEPT]]";
+    private static final String CONTACT_REJECT_PREFIX = "[[CONTACT_REJECT]]";
     private static final String FRIEND_REQUEST_CHANNEL_ID = "friend_request_channel";
 
     private SipService sipService;
@@ -91,17 +92,24 @@ public class MainActivity extends AppCompatActivity {
     private String myUsername = "";
     private final List<String> contacts = new ArrayList<>();
     private final List<ChatGroup> groups = new ArrayList<>();
+    private final Set<String> pendingIncomingCallPrompts = new LinkedHashSet<>();
     private final Set<String> pendingGroupCallPrompts = new LinkedHashSet<>();
 
     public static class ConversationItem {
         public final String key;
         public final String title;
         public final boolean group;
+        public final boolean section;
 
         public ConversationItem(String key, String title, boolean group) {
+            this(key, title, group, false);
+        }
+
+        public ConversationItem(String key, String title, boolean group, boolean section) {
             this.key = key;
             this.title = title;
             this.group = group;
+            this.section = section;
         }
     }
 
@@ -154,7 +162,8 @@ public class MainActivity extends AppCompatActivity {
                 myUsername = sipService.getConfig().getUsername();
             }
 
-            sipService.setEventListener(sipEventListener);
+            sipService.addEventListener(sipEventListener);
+            GroupAdminClient.reportUser(sipService.getConfig());
             publishConversationList();
             syncGroupsFromAdminServer(false);
             Log.i(TAG, "SipService bound, username: " + myUsername);
@@ -209,6 +218,11 @@ public class MainActivity extends AppCompatActivity {
 
             if (isContactAcceptMessage(body)) {
                 handleIncomingContactAccept(fromUser, body);
+                return;
+            }
+
+            if (isContactRejectMessage(body)) {
+                handleIncomingContactReject(fromUser, body);
                 return;
             }
 
@@ -269,6 +283,13 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        if (ActiveCallGuard.isActive()) {
+            super.onCreate(savedInstanceState);
+            Log.w(TAG, "MainActivity launch suppressed because a call UI is active");
+            DiagnosticLog.w(TAG, "main launch suppressed during active call");
+            finish();
+            return;
+        }
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         createFriendRequestNotificationChannel();
@@ -285,8 +306,12 @@ public class MainActivity extends AppCompatActivity {
         toolbar.inflateMenu(R.menu.main_toolbar_menu);
         toolbar.setOnMenuItemClickListener(this::onToolbarMenuItemClicked);
 
-        Intent serviceIntent = new Intent(this, SipService.class);
-        bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE);
+        // 使用 LoginActivity 的静态 SipClient，不启动 SipService
+        if (com.sipvideochat.ui.LoginActivity.sSipClient != null) {
+            myUsername = com.sipvideochat.ui.LoginActivity.sSipClient.getConfig().getUsername();
+        }
+        publishConversationList();
+        syncGroupsFromAdminServer(false);
 
         if (savedInstanceState == null) {
             getSupportFragmentManager().beginTransaction()
@@ -302,7 +327,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         if (sipService != null) {
-            sipService.setEventListener(sipEventListener);
+            sipService.addEventListener(sipEventListener);
         }
         syncGroupsFromAdminServer(false);
     }
@@ -320,25 +345,19 @@ public class MainActivity extends AppCompatActivity {
                 + ", callId=" + (callData.invite != null ? callData.invite.callId : "null")
                 + ", video=" + (callData.sdp != null && callData.sdp.contains("m=video"))
                 + ", sdpLength=" + (callData.sdp == null ? 0 : callData.sdp.length()));
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("Incoming call")
-                .setMessage(callData.fromUser + " wants to start a call.")
-                .setPositiveButton("Accept", (dialog, which) -> {
-                    Intent intent = new Intent(this, CallActivity.class);
-                    intent.putExtra("remoteUser", callData.fromUser);
-                    intent.putExtra("isOutgoing", false);
-                    intent.putExtra("videoEnabled", callData.sdp != null && callData.sdp.contains("m=video"));
-                    intent.putExtra("remoteSdp", callData.sdp);
-                    CallActivity.pendingInvite = callData.invite;
-                    startActivity(intent);
-                })
-                .setNegativeButton("Decline", (dialog, which) -> {
-                    if (sipService != null) {
-                        sipService.rejectCall(callData.invite);
-                    }
-                })
-                .setCancelable(false)
-                .show();
+        String promptKey = callData.invite != null && callData.invite.callId != null
+                ? callData.invite.callId
+                : callData.fromUser + "|" + System.currentTimeMillis();
+        if (!pendingIncomingCallPrompts.add(promptKey)) {
+            return;
+        }
+        Intent intent = new Intent(this, CallActivity.class);
+        intent.putExtra("remoteUser", callData.fromUser);
+        intent.putExtra("isOutgoing", false);
+        intent.putExtra("videoEnabled", callData.sdp != null && callData.sdp.contains("m=video"));
+        intent.putExtra("remoteSdp", callData.sdp);
+        CallActivity.pendingInvite = callData.invite;
+        startActivity(intent);
     }
 
     public void sendTextMessage(String conversationKey, String text) {
@@ -443,11 +462,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void makeAudioCall(String targetUser) {
-        if (sipService == null || !sipService.isSessionReady()) {
+        com.sipvideochat.sip.SipClient client = com.sipvideochat.ui.LoginActivity.sSipClient;
+        if (client == null || !client.isRegistered()) {
             Toast.makeText(this, "SIP session is not ready.", Toast.LENGTH_SHORT).show();
             return;
         }
-        sipService.makeCall(targetUser, false);
+        try { client.makeCall(targetUser, false); } catch (Exception e) { e.printStackTrace(); }
 
         Intent intent = new Intent(this, CallActivity.class);
         intent.putExtra("remoteUser", targetUser);
@@ -457,10 +477,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void makeVideoCall(String targetUser) {
-        if (sipService == null || !sipService.isSessionReady()) {
+        com.sipvideochat.sip.SipClient client = com.sipvideochat.ui.LoginActivity.sSipClient;
+        if (client == null || !client.isRegistered()) {
             Toast.makeText(this, "SIP session is not ready.", Toast.LENGTH_SHORT).show();
             return;
         }
+        try { client.makeCall(targetUser, true); } catch (Exception e) { e.printStackTrace(); }
 
         Intent intent = new Intent(this, CallActivity.class);
         intent.putExtra("remoteUser", targetUser);
@@ -509,6 +531,7 @@ public class MainActivity extends AppCompatActivity {
         if (added) {
             appendSystemMessage(normalized, "Contact request pending. Waiting for " + normalized + " to confirm.");
             sendContactRequestReminder(normalized);
+            reportContactToAdmin(normalized, "request sent");
         } else {
             Toast.makeText(this, normalized + " is already in your contacts.", Toast.LENGTH_SHORT).show();
         }
@@ -881,19 +904,11 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        Intent intent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-                this,
-                Math.abs((group.getId() + fromUser).hashCode()),
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, FRIEND_REQUEST_CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("Group invite")
                 .setContentText(contentText)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(contentText))
-                .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH);
 
@@ -983,9 +998,14 @@ public class MainActivity extends AppCompatActivity {
 
     private List<ConversationItem> buildConversationItems() {
         List<ConversationItem> items = new ArrayList<>();
+        items.add(new ConversationItem("__friends", "Friends", false, true));
         for (String contact : contacts) {
+            if (isGroupConversation(contact)) {
+                continue;
+            }
             items.add(new ConversationItem(contact, contact, false));
         }
+        items.add(new ConversationItem("__groups", "Groups", true, true));
         for (ChatGroup group : groups) {
             if (group.getId() == null) {
                 continue;
@@ -1123,6 +1143,30 @@ public class MainActivity extends AppCompatActivity {
             messageEventsLiveData.postValue(new MessageEvent(conversationKey, message, type));
             publishConversationList();
         }
+        if (type == MessageEvent.EventType.ADDED) {
+            reportMessageToAdmin(conversationKey, message);
+        }
+    }
+
+    private void reportMessageToAdmin(String conversationKey, Message message) {
+        ClientConfig config = sipService != null ? sipService.getConfig() : null;
+        if (config == null || message == null) {
+            return;
+        }
+        String peer = isGroupConversation(conversationKey) ? getConversationTitle(conversationKey) : conversationKey;
+        String scope = isGroupConversation(conversationKey) ? "group" : "direct";
+        String type = message.getType() == null ? "text" : message.getType().name().toLowerCase();
+        String content = MessageUiUtil.buildPreviewText(message);
+        adminSyncExecutor.execute(() -> GroupAdminClient.reportMessage(config,
+                message.getSenderId() == null ? myUsername : message.getSenderId(), peer, scope, type, content));
+    }
+
+    private void reportContactToAdmin(String peer, String status) {
+        ClientConfig config = sipService != null ? sipService.getConfig() : null;
+        if (config == null) {
+            return;
+        }
+        adminSyncExecutor.execute(() -> GroupAdminClient.reportContact(config, myUsername, peer, status));
     }
 
     private void updateMessageStatus(String messageId, Message.MessageStatus status, String reason) {
@@ -1248,9 +1292,14 @@ public class MainActivity extends AppCompatActivity {
         return body.getMsgContent().startsWith(CONTACT_ACCEPT_PREFIX);
     }
 
-    private void handleIncomingContactRequest(String fromUser, SipMessageBody body) {
-        addContactInternal(fromUser, true);
+    private boolean isContactRejectMessage(SipMessageBody body) {
+        if (body == null || body.getMsgContent() == null) {
+            return false;
+        }
+        return body.getMsgContent().startsWith(CONTACT_REJECT_PREFIX);
+    }
 
+    private void handleIncomingContactRequest(String fromUser, SipMessageBody body) {
         Message message = new Message();
         if (body.getMessageId() != null && !body.getMessageId().isEmpty()) {
             message.setId(body.getMessageId());
@@ -1264,16 +1313,24 @@ public class MainActivity extends AppCompatActivity {
         message.setStatus(Message.MessageStatus.DELIVERED);
 
         upsertMessage(fromUser, message, MessageEvent.EventType.ADDED, true);
+        reportContactToAdmin(fromUser, "request pending");
         showFriendRequestNotification(fromUser, message.getContent());
-        Toast.makeText(this, message.getContent(), Toast.LENGTH_SHORT).show();
-        sendContactAccepted(fromUser);
+        runOnUiThread(() -> showContactRequestDialog(fromUser, message.getContent()));
     }
 
     private void handleIncomingContactAccept(String fromUser, SipMessageBody body) {
         addContactInternal(fromUser, true);
+        reportContactToAdmin(fromUser, "mutual");
         String text = extractContactAcceptText(body.getMsgContent(), fromUser);
         appendSystemMessage(fromUser, text);
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show();
+    }
+
+    private void handleIncomingContactReject(String fromUser, SipMessageBody body) {
+        reportContactToAdmin(fromUser, "rejected");
+        String text = extractContactRejectText(body.getMsgContent(), fromUser);
+        appendSystemMessage(fromUser, text);
+        runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_SHORT).show());
     }
 
     private void sendContactRequestReminder(String targetUser) {
@@ -1317,6 +1374,52 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void sendContactRejected(String targetUser) {
+        if (sipService == null || !sipService.isSessionReady()) {
+            return;
+        }
+
+        Message message = new Message();
+        message.setSenderId(myUsername);
+        message.setSenderName(myUsername);
+        message.setReceiverId(targetUser);
+        message.setType(Message.MessageType.SYSTEM);
+        message.setContent(CONTACT_REJECT_PREFIX + myUsername + " declined your contact request.");
+        message.setStatus(Message.MessageStatus.SENDING);
+        try {
+            sipService.sendMessage(targetUser, toSipMessageBody(message, targetUser));
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to send contact rejection", e);
+        }
+    }
+
+    private void showContactRequestDialog(String fromUser, String content) {
+        if (isFinishing() || isDestroyed()) {
+            return;
+        }
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("Contact request")
+                .setMessage(content + "\n\nAccept this contact request?")
+                .setPositiveButton("Accept", (dialog, which) -> acceptContactRequest(fromUser))
+                .setNegativeButton("Reject", (dialog, which) -> rejectContactRequest(fromUser))
+                .show();
+    }
+
+    private void acceptContactRequest(String fromUser) {
+        addContactInternal(fromUser, true);
+        reportContactToAdmin(fromUser, "request accepted");
+        appendSystemMessage(fromUser, "You accepted " + fromUser + "'s contact request.");
+        sendContactAccepted(fromUser);
+        Toast.makeText(this, "Contact request accepted: " + fromUser, Toast.LENGTH_SHORT).show();
+    }
+
+    private void rejectContactRequest(String fromUser) {
+        reportContactToAdmin(fromUser, "request rejected");
+        appendSystemMessage(fromUser, "You declined " + fromUser + "'s contact request.");
+        sendContactRejected(fromUser);
+        Toast.makeText(this, "Contact request declined: " + fromUser, Toast.LENGTH_SHORT).show();
+    }
+
     private void appendSystemMessage(String conversationKey, String content) {
         Message message = new Message();
         message.setSenderId("System");
@@ -1347,6 +1450,17 @@ public class MainActivity extends AppCompatActivity {
         if (rawContent.startsWith(CONTACT_ACCEPT_PREFIX)) {
             String message = rawContent.substring(CONTACT_ACCEPT_PREFIX.length()).trim();
             return message.isEmpty() ? fromUser + " accepted your contact request. You are now mutual contacts." : message;
+        }
+        return rawContent;
+    }
+
+    private String extractContactRejectText(String rawContent, String fromUser) {
+        if (rawContent == null || rawContent.isEmpty()) {
+            return fromUser + " declined your contact request.";
+        }
+        if (rawContent.startsWith(CONTACT_REJECT_PREFIX)) {
+            String message = rawContent.substring(CONTACT_REJECT_PREFIX.length()).trim();
+            return message.isEmpty() ? fromUser + " declined your contact request." : message;
         }
         return rawContent;
     }
@@ -1385,19 +1499,11 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        Intent intent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-                this,
-                Math.abs((fromUser + contentText).hashCode()),
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, FRIEND_REQUEST_CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle("New contact request")
                 .setContentText(contentText)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(contentText))
-                .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH);
 
@@ -1537,6 +1643,9 @@ public class MainActivity extends AppCompatActivity {
         mediaMessageExecutor.shutdownNow();
         adminSyncExecutor.shutdownNow();
         if (serviceBound) {
+            if (sipService != null) {
+                sipService.removeEventListener(sipEventListener);
+            }
             unbindService(serviceConnection);
             serviceBound = false;
         }

@@ -48,6 +48,17 @@ public class ContactAdapter extends RecyclerView.Adapter<ContactAdapter.ViewHold
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         MainActivity.ConversationItem item = contacts.get(position);
+        if (item.section) {
+            holder.tvAvatar.setVisibility(View.GONE);
+            holder.tvContactName.setText(item.title);
+            holder.tvContactName.setTextSize(14);
+            holder.tvLastMessage.setVisibility(View.GONE);
+            holder.itemView.setOnClickListener(null);
+            holder.itemView.setOnLongClickListener(null);
+            return;
+        }
+        holder.tvAvatar.setVisibility(View.VISIBLE);
+        holder.tvContactName.setTextSize(17);
         String title = item.title == null || item.title.trim().isEmpty() ? item.key : item.title;
         String avatar = item.group ? "G" : title.substring(0, 1).toUpperCase();
         holder.tvAvatar.setText(avatar);

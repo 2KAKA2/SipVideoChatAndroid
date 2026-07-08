@@ -75,6 +75,71 @@ public final class GroupAdminClient {
         }
     }
 
+    public static void reportContact(ClientConfig config, String actor, String peer, String status) {
+        reportAudit(config, "contact", actor, peer, "", "", "", status, "", "android");
+    }
+
+    public static void reportUser(ClientConfig config) {
+        if (config == null) {
+            return;
+        }
+        new Thread(() -> {
+            try {
+                HttpURLConnection connection = openConnection(config, "/api/users", "POST");
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                StringBuilder payload = new StringBuilder();
+                appendForm(payload, "username", config.getUsername());
+                appendForm(payload, "ip", config.getLocalIp());
+                appendForm(payload, "port", String.valueOf(config.getLocalSipPort()));
+                appendForm(payload, "platform", "android");
+                try (OutputStream output = connection.getOutputStream()) {
+                    output.write(payload.toString().getBytes(StandardCharsets.UTF_8));
+                }
+                connection.getResponseCode();
+                connection.disconnect();
+            } catch (Exception ignored) {
+            }
+        }, "AdminUserReport").start();
+    }
+
+    public static void reportMessage(ClientConfig config, String actor, String peer, String scope,
+                                     String messageType, String content) {
+        reportAudit(config, "message", actor, peer, scope, messageType, content, "delivered", "", "android");
+    }
+
+    public static void reportCall(ClientConfig config, String actor, String peer, String scope,
+                                  String status, long durationSeconds) {
+        reportAudit(config, "call", actor, peer, scope, "", "", status,
+                String.valueOf(Math.max(0L, durationSeconds)), "android");
+    }
+
+    private static void reportAudit(ClientConfig config, String type, String actor, String peer, String scope,
+                                    String messageType, String content, String status, String duration,
+                                    String platform) {
+        try {
+            HttpURLConnection connection = openConnection(config, "/api/audit", "POST");
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+            StringBuilder payload = new StringBuilder();
+            appendForm(payload, "type", type);
+            appendForm(payload, "actor", actor);
+            appendForm(payload, "peer", peer);
+            appendForm(payload, "scope", scope);
+            appendForm(payload, "messageType", messageType);
+            appendForm(payload, "content", content);
+            appendForm(payload, "status", status);
+            appendForm(payload, "duration", duration);
+            appendForm(payload, "platform", platform);
+            try (OutputStream output = connection.getOutputStream()) {
+                output.write(payload.toString().getBytes(StandardCharsets.UTF_8));
+            }
+            connection.getResponseCode();
+            connection.disconnect();
+        } catch (Exception ignored) {
+        }
+    }
+
     private static ChatGroup writeGroup(ClientConfig config, String path, ChatGroup group) throws IOException {
         HttpURLConnection connection = openConnection(config, path, "POST");
         connection.setDoOutput(true);

@@ -26,10 +26,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * SIP鐎广垺鍩涚粩?- 閸樼喎顫?UDP 鐎圭偟骞囬敍鍫滅瑝娓氭繆绂?JAIN-SIP閿?
- * 閸欏倻鍙?sip0 閺嶈渹绶ラ敍灞惧閸斻劍鐎?SIP 濞戝牊浼呴敍宀勪缉閸?Android voip-common.jar 閸愯尙鐛婇妴?
- */
 public class SipClient {
     private static final String TAG = "SipClient";
     private static final String MESSAGE_CONTENT_TYPE_JSON = "application/json";
@@ -39,6 +35,13 @@ public class SipClient {
     private static final String CALL_TYPE_VIDEO = "video";
     private static final int REMOTE_SDP_FETCH_TIMEOUT_MS = 5000;
     private static final int PC_COMPAT_SIP_PORT = 5062;
+
+    // IMS 必选头
+    private static final String HEADER_PANI = "P-Access-Network-Info";
+    private static final String PANI_LTE = "3GPP-E-UTRAN; utran-cell-id-3gpp=0010100000000001";
+    private static final String HEADER_SECURITY_CLIENT = "Security-Client";
+    private static final String HEADER_SUPPORTED_IMS = "Supported";
+    private static final String SUPPORTED_IMS_VAL = "100rel, precondition, timer";
 
     private final ClientConfig config;
     private final List<SipEventListener> listeners = new ArrayList<>();
@@ -56,7 +59,6 @@ public class SipClient {
     private static final long INVITE_TIMEOUT_MS = 12000;
     private static final int MAX_SAFE_UDP_SIP_BYTES = 1200;
 
-    // 濞夈劌鍞介悩鑸碘偓?
     private String registerCallId;
     private String registerFromTag;
     private int registerCseq = 1;
@@ -64,7 +66,6 @@ public class SipClient {
     private long lastRegisterSuccessAtMs;
     private long registrationExpiresAtMs;
 
-    // 闁俺鐦介悩鑸碘偓?
     private String currentCallId;
     private String currentFromTag;
     private String currentToTag;
@@ -74,15 +75,13 @@ public class SipClient {
     private boolean currentInviteVideo;
     private int currentInviteBodyBytes;
     private int currentInvitePacketBytes;
-    private String remoteContact; // 鐎佃鏌熼惃?Contact 閸︽澘娼?
+    private String remoteContact;
     private boolean inCall = false;
     private boolean outgoingInvitePending = false;
     private String lastInviteFailureKey;
 
-    // 娣囨繂鐡ㄩ弶銉ф暩娣団剝浼?
     private IncomingInvite pendingIncomingInvite;
 
-    // P2P 閼辨梻閮存禍鍝勬勾閸р偓
     private final Map<String, String> userContacts = new HashMap<>();
     private final Map<String, OutgoingMessageTx> pendingMessageTx = new ConcurrentHashMap<>();
 
@@ -104,14 +103,16 @@ public class SipClient {
         listeners.remove(listener);
     }
 
-    // ============== 閸氼垰濮?/ 閸嬫粍顒?==============
 
     public synchronized void init() throws Exception {
         if (socket != null) return;
 
-        socket = new DatagramSocket(config.getLocalSipPort());
+        socket = new DatagramSocket(null);
+        socket.setReuseAddress(true);
+        socket.bind(new java.net.InetSocketAddress(config.getLocalSipPort()));
         running.set(true);
 
+        // UDP 接收线程
         recvThread = new Thread(() -> {
             byte[] buf = new byte[64 * 1024];
             while (running.get()) {
@@ -132,11 +133,53 @@ public class SipClient {
         }, "sip-recv");
         recvThread.setDaemon(true);
         recvThread.start();
+
+        // TCP 接收线程 (P-CSCF 用 TCP 投递来电 INVITE)
+        java.net.ServerSocket tcpServer = new java.net.ServerSocket();
+        tcpServer.setReuseAddress(true);
+        tcpServer.bind(new java.net.InetSocketAddress(config.getLocalSipPort()));
+        Thread tcpThread = new Thread(() -> {
+            while (running.get()) {
+                try {
+                    java.net.Socket client = tcpServer.accept();
+                    new Thread(() -> {
+                        try {
+                            java.io.BufferedReader reader = new java.io.BufferedReader(
+                                    new java.io.InputStreamReader(client.getInputStream(), "UTF-8"));
+                            StringBuilder sb = new StringBuilder();
+                            String line;
+                            int contentLength = 0;
+                            while ((line = reader.readLine()) != null && !line.isEmpty()) {
+                                sb.append(line).append("\r\n");
+                                if (line.toLowerCase().startsWith("content-length:")) {
+                                    contentLength = Integer.parseInt(line.substring(15).trim());
+                                }
+                            }
+                            sb.append("\r\n");
+                            if (contentLength > 0) {
+                                char[] body = new char[contentLength];
+                                reader.read(body, 0, contentLength);
+                                sb.append(body);
+                            }
+                            String msg = sb.toString();
+                            Log.d(TAG, "<<[tcp] " + msg.split("\r\n")[0] + " from " + client.getInetAddress().getHostAddress());
+                            handleIncoming(msg, client.getInetAddress(), client.getPort());
+                            client.close();
+                        } catch (Exception e) {
+                            if (running.get()) Log.w(TAG, "tcp recv error: " + e.getMessage());
+                        }
+                    }, "sip-tcp-recv").start();
+                } catch (Exception e) {
+                    if (running.get()) Log.w(TAG, "tcp accept error: " + e.getMessage());
+                }
+            }
+        }, "sip-tcp-accept");
+        tcpThread.setDaemon(true);
+        tcpThread.start();
         startCompatibilityReceiverIfNeeded();
 
         Log.w(TAG, "SIP Client started: " + config.getLocalIp() + ":" + config.getLocalSipPort());
 
-        // 閼奉亜濮╁▔銊ュ斀
         register();
     }
 
@@ -165,7 +208,6 @@ public class SipClient {
         scheduler.shutdownNow();
     }
 
-    // ============== 濞夈劌鍞?==============
 
     private void startCompatibilityReceiverIfNeeded() {
         if (config.getLocalSipPort() == PC_COMPAT_SIP_PORT || compatibilitySocket != null) {
@@ -248,18 +290,17 @@ public class SipClient {
         } else if (statusCode == 401) {
             cancelRegisterTimeout();
             if (registerAuthAttempted) {
-                for (SipEventListener l : listeners) l.onRegisterFailed("鐠併倛鐦夋径杈Е閿涙俺澶勯崣閿嬪灗鐎靛棛鐖滈柨娆掝嚖");
+                for (SipEventListener l : listeners) l.onRegisterFailed("Digest auth rejected");
                 return;
             }
             String www = getHeader(headers, "WWW-Authenticate");
             if (www == null) www = getHeader(headers, "Proxy-Authenticate");
             if (www == null || www.isEmpty()) {
-                for (SipEventListener l : listeners) l.onRegisterFailed("401 閺冪姾顓荤拠浣搞仈");
+                for (SipEventListener l : listeners) l.onRegisterFailed("Digest auth rejected");
                 return;
             }
             try {
                 registerAuthAttempted = true;
-                Log.d(TAG, "401 challenge: " + www);
                 String auth = buildDigestAuth(www, "REGISTER",
                         "sip:" + config.getSipServerHost() + ":" + config.getSipServerPort(),
                         config.getUsername(), config.getPassword());
@@ -273,16 +314,15 @@ public class SipClient {
                 Log.d(TAG, "Authenticated REGISTER sent with cseq=" + registerCseq);
                 Log.w(TAG, "Authenticated REGISTER sent");
             } catch (Exception e) {
-                Log.e(TAG, "鐠併倛鐦夋径杈Е", e);
+                Log.e(TAG, "Digest auth calculation failed", e);
                 for (SipEventListener l : listeners) l.onRegisterFailed("Digest auth calculation failed");
             }
         } else {
             cancelRegisterTimeout();
-            for (SipEventListener l : listeners) l.onRegisterFailed("濞夈劌鍞芥径杈Е: " + statusCode);
+            for (SipEventListener l : listeners) l.onRegisterFailed("SIP status: " + statusCode);
         }
     }
 
-    // ============== 閸欐垿鈧焦绉烽幁?==============
 
     public void sendMessage(String targetUser, SipMessageBody body) throws Exception {
         String callId = uuid();
@@ -308,12 +348,20 @@ public class SipClient {
         LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
         hdrs.put("Via", "SIP/2.0/UDP " + config.getLocalIp() + ":" + config.getLocalSipPort() + ";branch=" + branch() + ";rport");
         hdrs.put("Max-Forwards", "70");
-        hdrs.put("From", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">;tag=" + tx.fromTag);
-        hdrs.put("To", "<sip:" + tx.targetUser + "@" + config.getSipServerHost() + ">");
+        String fromUri = config.getFromUri();
+        String toUri = config.isImsMode()
+                ? "sip:" + tx.targetUser + "@" + config.getRealm()
+                : "sip:" + tx.targetUser + "@" + config.getSipServerHost();
+        hdrs.put("From", "<" + fromUri + ">;tag=" + tx.fromTag);
+        hdrs.put("To", "<" + toUri + ">");
         hdrs.put("Call-ID", tx.callId);
         hdrs.put("CSeq", tx.cseq + " MESSAGE");
         hdrs.put("Contact", "<sip:" + config.getUsername() + "@" + config.getLocalIp() + ":" + config.getLocalSipPort() + ">");
         hdrs.put("User-Agent", "SipVideoChat-Android");
+        if (tx.authHeader != null && !tx.authHeader.isEmpty()) {
+            hdrs.put("Authorization", tx.authHeader);
+        }
+        addImsHeaders(hdrs);
 
         String msg = buildSipMessage("MESSAGE " + tx.requestUri + " SIP/2.0", hdrs, contentType, tx.bodyJson);
         send(msg);
@@ -323,7 +371,6 @@ public class SipClient {
                 + ", contentType=" + contentType
                 + ", bodyLength=" + tx.bodyJson.length());
     }
-    // ============== 閸欐垼鎹ｉ柅姘崇樈 ==============
 
     public void makeCall(String targetUser, boolean videoEnabled) throws Exception {
         makeCall(targetUser, videoEnabled, null);
@@ -361,8 +408,12 @@ public class SipClient {
         LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
         hdrs.put("Via", "SIP/2.0/UDP " + config.getLocalIp() + ":" + config.getLocalSipPort() + ";branch=" + currentInviteBranch + ";rport");
         hdrs.put("Max-Forwards", "70");
-        hdrs.put("From", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">;tag=" + currentFromTag);
-        hdrs.put("To", "<sip:" + targetUser + "@" + config.getSipServerHost() + ">");
+        String fromUri = config.getFromUri();
+        String toUri = config.isImsMode()
+                ? "sip:" + targetUser + "@" + config.getRealm()
+                : "sip:" + targetUser + "@" + config.getSipServerHost();
+        hdrs.put("From", "<" + fromUri + ">;tag=" + currentFromTag);
+        hdrs.put("To", "<" + toUri + ">");
         hdrs.put("Call-ID", currentCallId);
         hdrs.put("CSeq", "1 INVITE");
         hdrs.put("Contact", "<sip:" + config.getUsername() + "@" + config.getLocalIp() + ":" + config.getLocalSipPort() + ">");
@@ -373,6 +424,8 @@ public class SipClient {
                 hdrs.put(HEADER_WEBRTC_SDP_URL, sdpUrl);
             }
         }
+        // IMS 必选头
+        addImsHeaders(hdrs);
 
         String requestUri = getRequestUri(targetUser);
         currentRemoteUri = requestUri;
@@ -401,10 +454,9 @@ public class SipClient {
             Log.w(TAG, "INVITE packet likely exceeds safe UDP size, packetBytes=" + currentInvitePacketBytes
                     + ", threshold=" + MAX_SAFE_UDP_SIP_BYTES);
         }
-        Log.w(TAG, "INVITE 閸欐垿鈧礁鍩? " + targetUser);
+        Log.w(TAG, "INVITE sent to: " + targetUser);
     }
 
-    // ============== 閹恒儱鎯夐弶銉ф暩 ==============
 
     public void answerCall(IncomingInvite invite, boolean videoEnabled) throws Exception {
         answerCall(invite, videoEnabled, null);
@@ -473,10 +525,9 @@ public class SipClient {
                 + ", bodyLength=" + sdp.length()
                 + ", sdpUrl=" + sdpUrl
                 + ", remoteContact=" + remoteContact);
-        Log.w(TAG, "200 OK 瀹告彃褰傞柅渚婄礉閹恒儱鎯夐弶銉ф暩");
+        Log.w(TAG, "200 OK sent");
     }
 
-    // ============== 閹锋帞绮烽弶銉ф暩 ==============
 
     public void rejectCall(IncomingInvite invite) throws Exception {
         LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
@@ -493,7 +544,6 @@ public class SipClient {
         DiagnosticLog.i(TAG, "incoming call rejected callId=" + invite.callId + ", from=" + invite.fromUser);
     }
 
-    // ============== 閹稿倹鏌?==============
 
     public void hangup() throws Exception {
         if (currentCallId == null) return;
@@ -512,13 +562,15 @@ public class SipClient {
                 : ((currentRemoteUri != null && !currentRemoteUri.isEmpty())
                 ? currentRemoteUri
                 : "sip:" + config.getSipServerHost() + ":" + config.getSipServerPort());
+        HostPort directTarget = extractHostPort(remoteContact);
         String fromTag = currentFromTag != null ? currentFromTag : shortUuid();
         String toHeader = "<" + requestUri + ">" + (currentToTag != null ? ";tag=" + currentToTag : "");
 
         LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
         hdrs.put("Via", "SIP/2.0/UDP " + config.getLocalIp() + ":" + config.getLocalSipPort() + ";branch=" + branch() + ";rport");
         hdrs.put("Max-Forwards", "70");
-        hdrs.put("From", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">;tag=" + fromTag);
+        String fromUri = config.getFromUri();
+        hdrs.put("From", "<" + fromUri + ">;tag=" + fromTag);
         hdrs.put("To", toHeader);
         hdrs.put("Call-ID", currentCallId);
         hdrs.put("CSeq", currentLocalCseq + " BYE");
@@ -526,17 +578,22 @@ public class SipClient {
         hdrs.put("User-Agent", "SipVideoChat-Android");
 
         String msg = buildSipMessage("BYE " + requestUri + " SIP/2.0", hdrs, null, null);
-        send(msg);
+        if (directTarget != null) {
+            sendTo(msg, InetAddress.getByName(directTarget.host), directTarget.port);
+        } else {
+            send(msg);
+        }
         String callId = currentCallId;
         resetCallState();
-        Log.i(TAG, "BYE sent, callId=" + callId + ", requestUri=" + requestUri);
+        Log.i(TAG, "BYE sent, callId=" + callId
+                + ", requestUri=" + requestUri
+                + ", directTarget=" + (directTarget != null ? directTarget.host + ":" + directTarget.port : "server"));
     }
 
     public void addUserContact(String username, String ip, int port) {
         userContacts.put(username, ip + ":" + port);
     }
 
-    // ============== 婢跺嫮鎮婇弨璺哄煂閻ㄥ嫭绉烽幁?==============
 
     private void handleIncoming(String raw, InetAddress sourceAddr, int sourcePort) {
         String[] parts = raw.split("\r\n\r\n", 2);
@@ -548,7 +605,6 @@ public class SipClient {
         if (lines.length == 0) return;
         String startLine = lines[0].trim();
 
-        // 鐟欙絾鐎?headers
         Map<String, String> headers = new LinkedHashMap<>();
         for (int i = 1; i < lines.length; i++) {
             int idx = lines[i].indexOf(':');
@@ -561,7 +617,6 @@ public class SipClient {
 
         try {
             if (startLine.startsWith("SIP/2.0")) {
-                // 閸濆秴绨?
                 String[] sp = startLine.split("\\s+", 3);
                 int statusCode = Integer.parseInt(sp[1]);
                 String cseqHeader = getHeader(headers, "CSeq");
@@ -576,7 +631,6 @@ public class SipClient {
                     handleMessageResponse(headers, statusCode);
                 }
             } else {
-                // 鐠囬攱鐪?
                 String[] sp = startLine.split("\\s+", 3);
                 if (sp.length < 2) return;
                 String method = sp[0].toUpperCase();
@@ -586,7 +640,6 @@ public class SipClient {
                         handleIncomingInviteCompat(headers, body, sourceAddr, sourcePort);
                         break;
                     case "ACK":
-                        // ACK 绾喛顓婚柅姘崇樈瀵よ櫣鐝?
                         for (SipEventListener l : listeners) l.onCallConnected(null);
                         break;
                     case "BYE":
@@ -652,11 +705,11 @@ public class SipClient {
 
             if (!failureKey.equals(lastInviteFailureKey)) {
                 if (statusCode == 486) {
-                    for (SipEventListener l : listeners) l.onCallFailed("鐎佃鏌熻箛?");
+                    for (SipEventListener l : listeners) l.onCallFailed("Remote busy");
                 } else if (statusCode == 603) {
-                    for (SipEventListener l : listeners) l.onCallFailed("鐎佃鏌熼幏鎺旂卜");
+                    for (SipEventListener l : listeners) l.onCallFailed("Remote declined");
                 } else {
-                    for (SipEventListener l : listeners) l.onCallFailed("閸涚厧褰ㄦ径杈Е: " + statusCode);
+                    for (SipEventListener l : listeners) l.onCallFailed("Call failed: " + statusCode);
                 }
                 lastInviteFailureKey = failureKey;
             }
@@ -669,6 +722,10 @@ public class SipClient {
         Log.i(TAG, "REGISTER response status=" + statusCode
                 + ", callId=" + getHeader(headers, "Call-ID")
                 + ", cseq=" + getHeader(headers, "CSeq"));
+        // 1xx 都是临时响应，忽略不处理
+        if (statusCode >= 100 && statusCode < 200) {
+            return;
+        }
         if (statusCode == 200) {
             cancelRegisterTimeout();
             registered.set(true);
@@ -701,7 +758,7 @@ public class SipClient {
                 registered.set(false);
                 registrationExpiresAtMs = 0L;
                 for (SipEventListener listener : listeners) {
-                    listener.onRegisterFailed("401 without challenge");
+                    listener.onRegisterFailed("Digest auth rejected");
                 }
                 return;
             }
@@ -973,6 +1030,31 @@ public class SipClient {
             return;
         }
 
+        if ((statusCode == 401 || statusCode == 407) && !tx.retriedWithAuth) {
+            String www = getHeader(headers, "WWW-Authenticate");
+            if (www == null || www.isEmpty()) {
+                www = getHeader(headers, "Proxy-Authenticate");
+            }
+            if (www != null && !www.isEmpty()) {
+                tx.retriedWithAuth = true;
+                tx.cseq++;
+                tx.authHeader = buildDigestAuth(www, "MESSAGE", tx.requestUri,
+                        config.getUsername(), config.getPassword());
+                try {
+                    scheduleMessageTimeout(tx);
+                    sendMessageRequest(tx, MESSAGE_CONTENT_TYPE_JSON);
+                    Log.w(TAG, "MESSAGE auth challenge handled, retried callId=" + callId
+                            + ", status=" + statusCode);
+                } catch (Exception e) {
+                    cancelMessageTimeout(tx);
+                    pendingMessageTx.remove(callId);
+                    Log.e(TAG, "MESSAGE auth retry failed, callId=" + callId, e);
+                    notifyMessageStatus(tx.messageId, Message.MessageStatus.FAILED, "Auth retry failed");
+                }
+                return;
+            }
+        }
+
         if (statusCode == 406 && !tx.retriedAsTextPlain) {
             tx.retriedAsTextPlain = true;
             tx.cseq++;
@@ -1034,10 +1116,8 @@ public class SipClient {
         }
     }
     private void handleIncomingInvite(Map<String, String> headers, String body, InetAddress sourceAddr, int sourcePort) throws Exception {
-        // 閸忓牆褰?180 Ringing
         sendResponse(headers, 180, "Ringing", sourceAddr, sourcePort);
 
-        // 閹绘劕褰囬弶銉ф暩娣団剝浼?
         String fromHeader = getHeader(headers, "From");
         String fromUser = extractUser(fromHeader);
         String callId = getHeader(headers, "Call-ID");
@@ -1064,9 +1144,15 @@ public class SipClient {
     }
 
     private void handleIncomingBye(Map<String, String> headers, InetAddress sourceAddr, int sourcePort) throws Exception {
-        Log.i(TAG, "Incoming BYE callId=" + getHeader(headers, "Call-ID")
+        String callId = getHeader(headers, "Call-ID");
+        Log.i(TAG, "Incoming BYE callId=" + callId
                 + ", from=" + sourceAddr.getHostAddress() + ":" + sourcePort);
         sendResponse(headers, 200, "OK", sourceAddr, sourcePort);
+        if (!isCurrentCallId(callId)) {
+            Log.w(TAG, "Ignore stale BYE callId=" + callId + ", currentCallId=" + currentCallId);
+            DiagnosticLog.w(TAG, "ignore stale BYE callId=" + callId + ", currentCallId=" + currentCallId);
+            return;
+        }
         resetCallState();
         for (SipEventListener l : listeners) l.onCallEnded();
     }
@@ -1085,7 +1171,7 @@ public class SipClient {
             } else {
                 message = SipMessageBody.createTextMessage(fromUser, config.getUsername(), body);
             }
-            Log.w(TAG, "閺€璺哄煂 MESSAGE from: " + fromUser);
+            Log.w(TAG, "Incoming MESSAGE from: " + fromUser);
             for (SipEventListener l : listeners) {
                 l.onMessageReceived(fromUser, message);
             }
@@ -1093,12 +1179,28 @@ public class SipClient {
     }
 
     private void handleIncomingCancel(Map<String, String> headers, InetAddress sourceAddr, int sourcePort) throws Exception {
-        Log.i(TAG, "Incoming CANCEL callId=" + getHeader(headers, "Call-ID")
+        String callId = getHeader(headers, "Call-ID");
+        Log.i(TAG, "Incoming CANCEL callId=" + callId
                 + ", cseq=" + getHeader(headers, "CSeq")
                 + ", from=" + sourceAddr.getHostAddress() + ":" + sourcePort);
         sendResponse(headers, 200, "OK", sourceAddr, sourcePort);
+        if (!isCurrentCallId(callId)) {
+            Log.w(TAG, "Ignore stale CANCEL callId=" + callId + ", currentCallId=" + currentCallId);
+            DiagnosticLog.w(TAG, "ignore stale CANCEL callId=" + callId + ", currentCallId=" + currentCallId);
+            return;
+        }
         resetCallState();
         for (SipEventListener l : listeners) l.onCallEnded();
+    }
+
+    private boolean isCurrentCallId(String callId) {
+        if (callId == null || callId.isEmpty()) {
+            return false;
+        }
+        if (currentCallId != null) {
+            return callId.equals(currentCallId);
+        }
+        return pendingIncomingInvite != null && callId.equals(pendingIncomingInvite.callId);
     }
 
     private void notifyMessageStatus(String messageId, Message.MessageStatus status, String reason) {
@@ -1240,7 +1342,6 @@ public class SipClient {
         keepAliveThread.start();
     }
 
-    // ============== 閺嬪嫬缂?SIP 濞戝牊浼?==============
 
     private void resetCallState() {
         cancelInviteTimeout();
@@ -1266,8 +1367,11 @@ public class SipClient {
         hdrs.put("Max-Forwards", "70");
         String fromTag = (registerFromTag != null) ? registerFromTag : shortUuid();
         registerFromTag = fromTag;
-        hdrs.put("From", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">;tag=" + fromTag);
-        hdrs.put("To", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">");
+
+        // IMS 模式使用完整 IMPU，普通模式使用简单格式
+        String fromUri = config.getFromUri();
+        hdrs.put("From", "<" + fromUri + ">;tag=" + fromTag);
+        hdrs.put("To", "<" + fromUri + ">");
         hdrs.put("Call-ID", callId);
         hdrs.put("CSeq", cseq + " REGISTER");
         hdrs.put("Contact", "<sip:" + config.getUsername() + "@" + config.getLocalIp() + ":" + config.getLocalSipPort() + ";transport=udp>");
@@ -1276,19 +1380,36 @@ public class SipClient {
         if (authHeader != null && !authHeader.isEmpty()) {
             hdrs.put("Authorization", authHeader);
         }
-        return buildSipMessage("REGISTER sip:" + config.getSipServerHost() + ":" + config.getSipServerPort() + " SIP/2.0", hdrs, null, null);
+        // IMS 必选头
+        addImsHeaders(hdrs);
+        // IMS 模式: REGISTER 到 IMS 域; 普通模式: REGISTER 到服务器 IP
+        String registerUri = config.isImsMode()
+                ? "sip:" + config.getRealm()
+                : "sip:" + config.getSipServerHost() + ":" + config.getSipServerPort();
+        return buildSipMessage("REGISTER " + registerUri + " SIP/2.0", hdrs, null, null);
+    }
+
+    /**
+     * 为 IMS 模式添加必选 SIP 头
+     */
+    private void addImsHeaders(LinkedHashMap<String, String> hdrs) {
+        if (!config.isImsMode()) return;
+        hdrs.put(HEADER_PANI, PANI_LTE);
+        hdrs.put(HEADER_SUPPORTED_IMS, SUPPORTED_IMS_VAL);
     }
 
     private String buildOptionsRequest(int cseq) {
         LinkedHashMap<String, String> hdrs = new LinkedHashMap<>();
         hdrs.put("Via", "SIP/2.0/UDP " + config.getLocalIp() + ":" + config.getLocalSipPort() + ";branch=" + branch() + ";rport");
         hdrs.put("Max-Forwards", "70");
-        hdrs.put("From", "<sip:" + config.getUsername() + "@" + config.getSipServerHost() + ">;tag=" + shortUuid());
+        String fromUri = config.getFromUri();
+        hdrs.put("From", "<" + fromUri + ">;tag=" + shortUuid());
         hdrs.put("To", "<sip:" + config.getSipServerHost() + ">");
         hdrs.put("Call-ID", uuid());
         hdrs.put("CSeq", cseq + " OPTIONS");
         hdrs.put("Contact", "<sip:" + config.getUsername() + "@" + config.getLocalIp() + ":" + config.getLocalSipPort() + ">");
         hdrs.put("User-Agent", "SipVideoChat-Android");
+        addImsHeaders(hdrs);
         return buildSipMessage("OPTIONS sip:" + config.getSipServerHost() + ":" + config.getSipServerPort() + " SIP/2.0", hdrs, null, null);
     }
 
@@ -1310,7 +1431,6 @@ public class SipClient {
         return sb.toString();
     }
 
-    // ============== 缂冩垹绮堕崣鎴︹偓?==============
 
     private void send(String msg) {
         try {
@@ -1343,7 +1463,6 @@ public class SipClient {
         }
     }
 
-    // ============== SIP 濞戝牊浼呮惔蹇撳灙閸?==============
 
     private String buildSipMessage(String startLine, LinkedHashMap<String, String> headers, String contentType, String body) {
         String b = (body != null) ? body : "";
@@ -1365,7 +1484,6 @@ public class SipClient {
         return sb.toString();
     }
 
-    // ============== 瀹搞儱鍙块弬瑙勭《 ==============
 
     private String getRequestUri(String targetUser) {
         String contact = userContacts.get(targetUser);
@@ -1373,11 +1491,13 @@ public class SipClient {
             String[] parts = contact.split(":");
             return "sip:" + targetUser + "@" + parts[0] + ":" + parts[1];
         }
+        if (config.isImsMode()) {
+            return "sip:" + targetUser + "@" + config.getRealm();
+        }
         return "sip:" + targetUser + "@" + config.getSipServerHost() + ":" + config.getSipServerPort();
     }
 
     private String getHeader(Map<String, String> headers, String name) {
-        // 婢堆冪毈閸愭瑤绗夐弫蹇斿妳閺屻儲澹?
         for (Map.Entry<String, String> entry : headers.entrySet()) {
             if (entry.getKey().equalsIgnoreCase(name)) {
                 return entry.getValue();
@@ -1388,13 +1508,11 @@ public class SipClient {
 
     private String extractUser(String headerValue) {
         if (headerValue == null) return "unknown";
-        // 娴?<sip:user@host> 閹?sip:user@host 娑擃厽褰侀崣?user
         int sipIdx = headerValue.indexOf("sip:");
         if (sipIdx < 0) return headerValue;
         String s = headerValue.substring(sipIdx + 4);
         int atIdx = s.indexOf('@');
         if (atIdx > 0) s = s.substring(0, atIdx);
-        // 閸樼粯甯€閸欘垵鍏橀惃?> 缂佹挸鐔?
         s = s.replace(">", "").trim();
         return s;
     }
@@ -1708,17 +1826,28 @@ public class SipClient {
         return UUID.randomUUID().toString().replace("-", "").substring(0, 10);
     }
 
-    // ============== Digest 鐠併倛鐦?==============
 
     private String buildDigestAuth(String wwwAuth, String method, String uri, String username, String password) {
         Map<String, String> params = parseDigestParams(wwwAuth);
         String realm = params.getOrDefault("realm", "");
         String nonce = params.getOrDefault("nonce", "");
+        String algorithm = params.getOrDefault("algorithm", "MD5");
         String qop = params.get("qop");
         String nc = "00000001";
         String cnonce = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
 
-        String ha1 = md5(username + ":" + realm + ":" + password);
+        // AKAv1-MD5: 使用 401 中的 ck+ik 作为密码
+        String ha1Password = password;
+        if ("AKAv1-MD5".equalsIgnoreCase(algorithm)) {
+            String ck = params.getOrDefault("ck", "");
+            String ik = params.getOrDefault("ik", "");
+            if (!ck.isEmpty() && !ik.isEmpty()) {
+                ha1Password = ck + ik;
+                Log.i(TAG, "Using AKAv1-MD5 auth: ck=" + ck + ", ik=" + ik);
+            }
+        }
+
+        String ha1 = md5(username + ":" + realm + ":" + ha1Password);
         String ha2 = md5(method + ":" + uri);
         String response;
         if (qop != null && !qop.isEmpty() && qop.contains("auth")) {
@@ -1739,7 +1868,7 @@ public class SipClient {
             sb.append("cnonce=\"").append(cnonce).append("\", ");
         }
         sb.append("response=\"").append(response).append("\", ");
-        sb.append("algorithm=MD5");
+        sb.append("algorithm=").append(algorithm);
         return sb.toString();
     }
 
@@ -1794,6 +1923,8 @@ public class SipClient {
         final String messageId;
         int cseq = 1;
         boolean retriedAsTextPlain = false;
+        boolean retriedWithAuth = false;
+        String authHeader;
         ScheduledFuture<?> timeoutFuture;
 
         OutgoingMessageTx(String callId, String fromTag, String targetUser, String requestUri, String bodyJson,
@@ -1807,7 +1938,6 @@ public class SipClient {
         }
     }
 
-    // ============== 閺夈儳鏁搁弫鐗堝祦 ==============
 
     public static class IncomingInvite {
         public String fromUser;

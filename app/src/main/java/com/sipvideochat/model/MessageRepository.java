@@ -17,6 +17,7 @@ public class MessageRepository {
     private static final String PREFS_NAME = "chat_message_store";
     private static final String KEY_CONTACTS = "contacts";
     private static final String KEY_MESSAGES_PREFIX = "messages_";
+    private static final String GROUP_KEY_PREFIX = "group:";
 
     private final SharedPreferences preferences;
 
@@ -29,7 +30,10 @@ public class MessageRepository {
         try {
             JSONArray array = new JSONArray(preferences.getString(KEY_CONTACTS, "[]"));
             for (int i = 0; i < array.length(); i++) {
-                contacts.add(array.optString(i));
+                String contact = array.optString(i);
+                if (isDirectContactKey(contact)) {
+                    contacts.add(contact);
+                }
             }
         } catch (JSONException ignored) {
         }
@@ -39,7 +43,9 @@ public class MessageRepository {
     public synchronized void saveContacts(List<String> contacts) {
         JSONArray array = new JSONArray();
         for (String contact : contacts) {
-            array.put(contact);
+            if (isDirectContactKey(contact)) {
+                array.put(contact);
+            }
         }
         preferences.edit().putString(KEY_CONTACTS, array.toString()).apply();
     }
@@ -77,11 +83,18 @@ public class MessageRepository {
     }
 
     private void ensureContact(String contactUser) {
+        if (!isDirectContactKey(contactUser)) {
+            return;
+        }
         List<String> contacts = getContacts();
         if (!contacts.contains(contactUser)) {
             contacts.add(contactUser);
             saveContacts(contacts);
         }
+    }
+
+    private boolean isDirectContactKey(String key) {
+        return key != null && !key.isEmpty() && !key.startsWith(GROUP_KEY_PREFIX);
     }
 
     private void saveMessages(String contactUser, List<Message> messages) {

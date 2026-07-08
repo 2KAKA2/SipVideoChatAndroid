@@ -37,6 +37,7 @@ import com.sipvideochat.media.RTPVideoSender;
 import com.sipvideochat.media.VideoCapture;
 import com.sipvideochat.model.CallLogRecord;
 import com.sipvideochat.model.CallLogRepository;
+import com.sipvideochat.model.GroupAdminClient;
 import com.sipvideochat.sip.SipClient;
 import com.sipvideochat.sip.SipEventListener;
 import com.sipvideochat.sip.SipService;
@@ -54,10 +55,10 @@ import java.util.regex.Pattern;
 
 public class CallActivity extends AppCompatActivity {
     private static final String TAG = "CallActivity";
-    private static final int LEGACY_VIDEO_WIDTH = 160;
-    private static final int LEGACY_VIDEO_HEIGHT = 120;
-    private static final int LEGACY_VIDEO_FRAME_RATE = 8;
-    private static final int LEGACY_VIDEO_BITRATE = 120_000;
+    private static final int LEGACY_VIDEO_WIDTH = 640;
+    private static final int LEGACY_VIDEO_HEIGHT = 480;
+    private static final int LEGACY_VIDEO_FRAME_RATE = 15;
+    private static final int LEGACY_VIDEO_BITRATE = 800_000;
 
     public static SipClient.IncomingInvite pendingInvite;
 
@@ -123,7 +124,7 @@ public class CallActivity extends AppCompatActivity {
             SipService.SipBinder binder = (SipService.SipBinder) service;
             sipService = binder.getService();
             serviceBound = true;
-            sipService.setEventListener(sipEventListener);
+            sipService.addEventListener(sipEventListener);
             maybeStartOutgoingVideoCall();
         }
 
@@ -184,6 +185,7 @@ public class CallActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        ActiveCallGuard.markActive();
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_call);
 
@@ -761,8 +763,6 @@ public class CallActivity extends AppCompatActivity {
     }
 
     private int getLegacyVideoWidth(ClientConfig config) {
-        // Keep the legacy PC interop path on a fixed profile instead of inheriting stale
-        // persisted app settings from earlier experiments.
         return LEGACY_VIDEO_WIDTH;
     }
 
@@ -869,6 +869,11 @@ public class CallActivity extends AppCompatActivity {
         record.setDurationSeconds(durationSeconds);
         record.setStatus(status == null ? "unknown" : status);
         new CallLogRepository(this).addCallLog(record);
+        ClientConfig config = sipService != null ? sipService.getConfig() : null;
+        if (config != null) {
+            GroupAdminClient.reportCall(config, config.getUsername(), remoteUser,
+                    videoEnabled ? "video" : "voice", record.getStatus(), durationSeconds);
+        }
     }
 
     private void toggleMute() {
@@ -972,9 +977,13 @@ public class CallActivity extends AppCompatActivity {
                 + ", connected=" + connected
                 + ", mediaStarted=" + mediaStarted
                 + ", legacyMode=" + legacyVideoMode);
+        ActiveCallGuard.markInactive();
         stopMedia("activity destroy");
         stopTimer();
         if (serviceBound) {
+            if (sipService != null) {
+                sipService.removeEventListener(sipEventListener);
+            }
             unbindService(serviceConnection);
             serviceBound = false;
         }

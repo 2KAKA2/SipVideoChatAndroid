@@ -3,7 +3,6 @@ package com.sipvideochat.sip;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
@@ -23,14 +22,15 @@ import androidx.core.app.NotificationCompat;
 
 import com.sipvideochat.config.ClientConfig;
 import com.sipvideochat.media.LocalMediaServer;
+import com.sipvideochat.model.GroupAdminClient;
 import com.sipvideochat.model.Message;
 import com.sipvideochat.protocol.SipMessageBody;
-import com.sipvideochat.ui.main.MainActivity;
 import com.sipvideochat.util.DiagnosticLog;
 
 import java.io.IOException;
 import java.util.Collections;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -52,10 +52,11 @@ public class SipService extends Service {
     private Handler mainHandler;
     private Handler reRegisterHandler;
     private Runnable reRegisterRunnable;
-    private volatile SipEventListener externalListener;
+    private final CopyOnWriteArraySet<SipEventListener> eventListeners = new CopyOnWriteArraySet<>();
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private final AtomicBoolean initInProgress = new AtomicBoolean(false);
+    private boolean foregroundStarted = false;
 
     public class SipBinder extends Binder {
         public SipService getService() {
@@ -76,7 +77,7 @@ public class SipService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        ensureForeground("SIP 服务启动中...");
+        ensureForeground("SIP service running");
         restoreSipIfPossible();
         return START_STICKY;
     }
@@ -90,7 +91,7 @@ public class SipService extends Service {
     public void initSip(ClientConfig config, SipEventListener listener) {
         if (config == null || !config.isSipConfigured()) {
             this.config = null;
-            this.externalListener = listener;
+            addEventListener(listener);
             if (listener != null) {
                 mainHandler.post(() -> listener.onRegisterFailed("SIP config unavailable"));
             }
@@ -98,9 +99,9 @@ public class SipService extends Service {
         }
 
         this.config = config;
-        this.externalListener = listener;
+        addEventListener(listener);
         ensureMediaServer();
-        ensureForeground("SIP 正在连接...");
+        ensureForeground("SIP service running");
 
         if (sipClient != null) {
             Log.w(TAG, "SIP already initialized");
@@ -120,14 +121,13 @@ public class SipService extends Service {
                     @Override
                     public void onRegistered() {
                         mainHandler.post(() -> {
-                            Log.i(TAG, "SIP registered user=" + config.getUsername()
-                                    + ", lastSuccessMs=" + client.getLastRegisterSuccessAtMs()
-                                    + ", expiresAtMs=" + client.getRegistrationExpiresAtMs());
-                            updateNotification("SIP 在线 - " + config.getUsername());
+                        Log.i(TAG, "SIP registered user=" + config.getUsername()
+                                + ", lastSuccessMs=" + client.getLastRegisterSuccessAtMs()
+                                + ", expiresAtMs=" + client.getRegistrationExpiresAtMs());
+                        GroupAdminClient.reportUser(config);
+                        updateNotification("SIP online - " + config.getUsername());
                             startReRegisterTimer();
-                            if (externalListener != null) {
-                                externalListener.onRegistered();
-                            }
+                            notifyRegistered();
                         });
                     }
 
@@ -135,10 +135,8 @@ public class SipService extends Service {
                     public void onRegisterFailed(String reason) {
                         mainHandler.post(() -> {
                             Log.w(TAG, "SIP register failed: " + reason);
-                            updateNotification("SIP 注册失败");
-                            if (externalListener != null) {
-                                externalListener.onRegisterFailed(reason);
-                            }
+                            updateNotification("SIP registration failed");
+                            notifyRegisterFailed(reason);
                         });
                     }
 
@@ -148,63 +146,49 @@ public class SipService extends Service {
                             Log.i(TAG, "Relay incoming INVITE from=" + fromUser
                                     + ", callId=" + (invite != null ? invite.callId : "null")
                                     + ", hasSdp=" + (sdp != null && !sdp.isEmpty()));
-                            if (externalListener != null) {
-                                externalListener.onIncomingCall(fromUser, sdp, invite);
-                            }
+                            notifyIncomingCall(fromUser, sdp, invite);
                         });
                     }
 
                     @Override
                     public void onCallRinging() {
                         mainHandler.post(() -> {
-                            if (externalListener != null) {
-                                externalListener.onCallRinging();
-                            }
+                            notifyCallRinging();
                         });
                     }
 
                     @Override
                     public void onCallConnected(String remoteSdp) {
                         mainHandler.post(() -> {
-                            if (externalListener != null) {
-                                externalListener.onCallConnected(remoteSdp);
-                            }
+                            notifyCallConnected(remoteSdp);
                         });
                     }
 
                     @Override
                     public void onCallEnded() {
                         mainHandler.post(() -> {
-                            if (externalListener != null) {
-                                externalListener.onCallEnded();
-                            }
+                            notifyCallEnded();
                         });
                     }
 
                     @Override
                     public void onCallFailed(String reason) {
                         mainHandler.post(() -> {
-                            if (externalListener != null) {
-                                externalListener.onCallFailed(reason);
-                            }
+                            notifyCallFailed(reason);
                         });
                     }
 
                     @Override
                     public void onMessageReceived(String fromUser, SipMessageBody message) {
                         mainHandler.post(() -> {
-                            if (externalListener != null) {
-                                externalListener.onMessageReceived(fromUser, message);
-                            }
+                            notifyMessageReceived(fromUser, message);
                         });
                     }
 
                     @Override
                     public void onMessageStatusChanged(String messageId, Message.MessageStatus status, String reason) {
                         mainHandler.post(() -> {
-                            if (externalListener != null) {
-                                externalListener.onMessageStatusChanged(messageId, status, reason);
-                            }
+                            notifyMessageStatusChanged(messageId, status, reason);
                         });
                     }
                 });
@@ -215,11 +199,9 @@ public class SipService extends Service {
             } catch (Exception e) {
                 Log.e(TAG, "Failed to initialize SIP", e);
                 mainHandler.post(() -> {
-                    updateNotification("SIP 初始化失败");
-                    if (externalListener != null) {
-                        String reason = e.getMessage() != null ? e.getMessage() : "Init failed";
-                        externalListener.onRegisterFailed("初始化失败: " + reason);
-                    }
+                    updateNotification("SIP init failed");
+                    String reason = e.getMessage() != null ? e.getMessage() : "Init failed";
+                    notifyRegisterFailed("SIP init failed: " + reason);
                 });
             } finally {
                 initInProgress.set(false);
@@ -228,15 +210,27 @@ public class SipService extends Service {
     }
 
     public void setEventListener(SipEventListener listener) {
-        this.externalListener = listener;
+        addEventListener(listener);
         restoreSipIfPossible();
+    }
+
+    public void addEventListener(SipEventListener listener) {
+        if (listener != null) {
+            eventListeners.add(listener);
+        }
+    }
+
+    public void removeEventListener(SipEventListener listener) {
+        if (listener != null) {
+            eventListeners.remove(listener);
+        }
     }
 
     public void sendMessage(String targetUser, SipMessageBody body) {
         if (!isSessionReady()) {
-            if (body != null && body.getMessageId() != null && externalListener != null) {
+            if (body != null && body.getMessageId() != null) {
                 String messageId = body.getMessageId();
-                mainHandler.post(() -> externalListener.onMessageStatusChanged(
+                mainHandler.post(() -> notifyMessageStatusChanged(
                         messageId, Message.MessageStatus.FAILED, "SIP unavailable"));
             }
             return;
@@ -249,9 +243,9 @@ public class SipService extends Service {
                 }
             } catch (Exception e) {
                 Log.e(TAG, "Failed to send SIP MESSAGE", e);
-                if (externalListener != null) {
+                if (body != null && body.getMessageId() != null) {
                     String reason = e.getMessage() != null ? e.getMessage() : "Send failed";
-                    mainHandler.post(() -> externalListener.onMessageStatusChanged(
+                    mainHandler.post(() -> notifyMessageStatusChanged(
                             body.getMessageId(), Message.MessageStatus.FAILED, reason));
                 }
             }
@@ -264,9 +258,7 @@ public class SipService extends Service {
 
     public void makeCall(String targetUser, boolean videoEnabled, String customSdp) {
         if (!isSessionReady()) {
-            if (externalListener != null) {
-                mainHandler.post(() -> externalListener.onCallFailed("SIP unavailable"));
-            }
+            mainHandler.post(() -> notifyCallFailed("SIP unavailable"));
             return;
         }
 
@@ -287,9 +279,7 @@ public class SipService extends Service {
 
     public void answerCall(SipClient.IncomingInvite invite, boolean videoEnabled, String customSdp) {
         if (sipClient == null) {
-            if (externalListener != null) {
-                mainHandler.post(() -> externalListener.onCallFailed("SIP unavailable"));
-            }
+            mainHandler.post(() -> notifyCallFailed("SIP unavailable"));
             return;
         }
 
@@ -416,7 +406,7 @@ public class SipService extends Service {
             @Override
             public void onLost(@NonNull Network network) {
                 Log.w(TAG, "Network lost");
-                updateNotification("SIP 离线 - 网络断开");
+                updateNotification("SIP network lost");
             }
         };
 
@@ -429,10 +419,10 @@ public class SipService extends Service {
     private void createNotificationChannel() {
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                "SIP 服务",
+                "SIP Service",
                 NotificationManager.IMPORTANCE_LOW
         );
-        channel.setDescription("保持 SIP 注册与本地媒体服务");
+        channel.setDescription("Keeps SIP registration and local media service alive.");
         NotificationManager notificationManager = getSystemService(NotificationManager.class);
         if (notificationManager != null) {
             notificationManager.createNotificationChannel(channel);
@@ -440,15 +430,10 @@ public class SipService extends Service {
     }
 
     private Notification buildNotification(String text) {
-        Intent intent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-                this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
-
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("SipVideoChat")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_menu_call)
-                .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
                 .build();
@@ -457,10 +442,17 @@ public class SipService extends Service {
     private void ensureForeground(String text) {
         try {
             Notification notification = buildNotification(text);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (foregroundStarted) {
+                NotificationManager nm = getSystemService(NotificationManager.class);
+                if (nm != null) {
+                    nm.notify(NOTIFICATION_ID, notification);
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                foregroundStarted = true;
             } else {
                 startForeground(NOTIFICATION_ID, notification);
+                foregroundStarted = true;
             }
         } catch (Exception e) {
             Log.e(TAG, "Failed to enter foreground", e);
@@ -469,10 +461,6 @@ public class SipService extends Service {
 
     private void updateNotification(String text) {
         ensureForeground(text);
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm != null) {
-            nm.notify(NOTIFICATION_ID, buildNotification(text));
-        }
     }
 
     private void ensureMediaServer() {
@@ -520,7 +508,61 @@ public class SipService extends Service {
         if (config == null) {
             return;
         }
-        initSip(config, externalListener);
+        initSip(config, null);
+    }
+
+    private void notifyRegistered() {
+        for (SipEventListener listener : eventListeners) {
+            listener.onRegistered();
+        }
+    }
+
+    private void notifyRegisterFailed(String reason) {
+        for (SipEventListener listener : eventListeners) {
+            listener.onRegisterFailed(reason);
+        }
+    }
+
+    private void notifyIncomingCall(String fromUser, String sdp, SipClient.IncomingInvite invite) {
+        for (SipEventListener listener : eventListeners) {
+            listener.onIncomingCall(fromUser, sdp, invite);
+        }
+    }
+
+    private void notifyCallRinging() {
+        for (SipEventListener listener : eventListeners) {
+            listener.onCallRinging();
+        }
+    }
+
+    private void notifyCallConnected(String remoteSdp) {
+        for (SipEventListener listener : eventListeners) {
+            listener.onCallConnected(remoteSdp);
+        }
+    }
+
+    private void notifyCallEnded() {
+        for (SipEventListener listener : eventListeners) {
+            listener.onCallEnded();
+        }
+    }
+
+    private void notifyCallFailed(String reason) {
+        for (SipEventListener listener : eventListeners) {
+            listener.onCallFailed(reason);
+        }
+    }
+
+    private void notifyMessageReceived(String fromUser, SipMessageBody message) {
+        for (SipEventListener listener : eventListeners) {
+            listener.onMessageReceived(fromUser, message);
+        }
+    }
+
+    private void notifyMessageStatusChanged(String messageId, Message.MessageStatus status, String reason) {
+        for (SipEventListener listener : eventListeners) {
+            listener.onMessageStatusChanged(messageId, status, reason);
+        }
     }
 
     private ClientConfig loadPersistedConfig() {
@@ -553,3 +595,4 @@ public class SipService extends Service {
         super.onDestroy();
     }
 }
+

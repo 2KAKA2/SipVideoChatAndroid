@@ -452,8 +452,8 @@ public class WebRtcVideoSession {
                 continue;
             }
             encoding.active = true;
-            encoding.maxBitrateBps = Math.max(videoBitrate, 300_000);
-            encoding.maxFramerate = Math.max(videoFrameRate, 12);
+            encoding.maxBitrateBps = Math.max(80_000, Math.min(videoBitrate, 180_000));
+            encoding.maxFramerate = Math.max(4, Math.min(videoFrameRate, 10));
         }
         try {
             localVideoSender.setParameters(parameters);

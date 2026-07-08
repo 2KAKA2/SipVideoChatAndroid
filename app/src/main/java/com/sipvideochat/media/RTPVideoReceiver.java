@@ -178,9 +178,7 @@ public class RTPVideoReceiver extends Thread {
         }
 
         if (currentTimestamp != rtpTimestamp) {
-            if (frameBufferPos > 0 && currentTimestamp >= 0 && !dropCurrentFrame) {
-                feedDecoder(frameBuffer, frameBufferPos, currentTimestamp);
-            } else if (frameBufferPos > 0 || dropCurrentFrame) {
+            if (frameBufferPos > 0 || dropCurrentFrame) {
                 incompleteFramesDropped++;
             }
             currentTimestamp = rtpTimestamp;

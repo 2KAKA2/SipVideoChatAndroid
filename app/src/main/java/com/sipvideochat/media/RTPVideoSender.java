@@ -35,6 +35,7 @@ public class RTPVideoSender extends Thread {
     private InetAddress remoteAddress;
     private volatile boolean running;
     private int sequenceNumber;
+    private int encoderColorFormat;
     private final int ssrc;
     private long baseCaptureTimeNs = -1L;
     private long framesEncoded;
@@ -107,10 +108,10 @@ public class RTPVideoSender extends Thread {
                     if (inputBuffer != null) {
                         inputBuffer.clear();
                         byte[] normalizedFrame = normalizeFrame(frame.nv21Data, frame.width, frame.height);
-                        byte[] i420 = nv21ToI420(normalizedFrame, targetWidth, targetHeight);
-                        inputBuffer.put(i420);
+                        byte[] encoderInput = toEncoderInputYuv(normalizedFrame, targetWidth, targetHeight);
+                        inputBuffer.put(encoderInput);
                         long ptsUs = toPresentationTimeUs(frame.captureTimeNs);
-                        encoder.queueInputBuffer(inputIndex, 0, i420.length, ptsUs, 0);
+                        encoder.queueInputBuffer(inputIndex, 0, encoderInput.length, ptsUs, 0);
                     }
                     drainEncoder(bufferInfo, OUTPUT_DRAIN_TIMEOUT_US);
                 } else {
@@ -144,16 +145,18 @@ public class RTPVideoSender extends Thread {
     }
 
     private void initEncoder(int width, int height) throws Exception {
+        encoder = MediaCodec.createEncoderByType("video/x-vnd.on2.vp8");
+        encoderColorFormat = chooseEncoderColorFormat(encoder);
+
         MediaFormat format = MediaFormat.createVideoFormat("video/x-vnd.on2.vp8", width, height);
         format.setInteger(MediaFormat.KEY_BIT_RATE, bitrate);
         format.setInteger(MediaFormat.KEY_FRAME_RATE, Math.max(1, frameRate));
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
-        format.setInteger(MediaFormat.KEY_COLOR_FORMAT,
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+        format.setInteger(MediaFormat.KEY_COLOR_FORMAT, encoderColorFormat);
 
-        encoder = MediaCodec.createEncoderByType("video/x-vnd.on2.vp8");
         encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         encoder.start();
+        DiagnosticLog.i(TAG, "video encoder colorFormat=" + encoderColorFormat);
     }
 
     private void releaseEncoder() {
@@ -169,6 +172,31 @@ public class RTPVideoSender extends Thread {
             encoder = null;
         }
         syncFrameRequestUnsupportedLogged = false;
+    }
+
+    private int chooseEncoderColorFormat(MediaCodec codec) {
+        try {
+            MediaCodecInfo.CodecCapabilities caps =
+                    codec.getCodecInfo().getCapabilitiesForType("video/x-vnd.on2.vp8");
+            int fallback = MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible;
+            boolean hasFlexible = false;
+            for (int color : caps.colorFormats) {
+                if (color == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar) {
+                    return color;
+                }
+                if (color == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar) {
+                    fallback = color;
+                } else if (color == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible) {
+                    hasFlexible = true;
+                }
+            }
+            return hasFlexible && fallback == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+                    ? MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+                    : fallback;
+        } catch (Exception e) {
+            DiagnosticLog.w(TAG, "failed to inspect encoder color formats: " + e.getMessage());
+            return MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible;
+        }
     }
 
     private long toRtpTimestamp(long captureTimeNs) {
@@ -310,6 +338,26 @@ public class RTPVideoSender extends Thread {
             i420[vPos + i] = nv21[ySize + i * 2];
         }
         return i420;
+    }
+
+    private byte[] toEncoderInputYuv(byte[] nv21, int width, int height) {
+        if (encoderColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar) {
+            return nv21ToNv12(nv21, width, height);
+        }
+        return nv21ToI420(nv21, width, height);
+    }
+
+    private byte[] nv21ToNv12(byte[] nv21, int width, int height) {
+        int ySize = width * height;
+        int totalSize = ySize * 3 / 2;
+        byte[] nv12 = new byte[totalSize];
+
+        System.arraycopy(nv21, 0, nv12, 0, Math.min(ySize, nv21.length));
+        for (int i = ySize; i + 1 < totalSize && i + 1 < nv21.length; i += 2) {
+            nv12[i] = nv21[i + 1];
+            nv12[i + 1] = nv21[i];
+        }
+        return nv12;
     }
 
     private byte[] normalizeFrame(byte[] nv21Data, int width, int height) {

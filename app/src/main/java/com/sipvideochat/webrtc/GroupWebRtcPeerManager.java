@@ -343,9 +343,9 @@ public class GroupWebRtcPeerManager {
         surfaceTextureHelper = SurfaceTextureHelper.create("GroupCallCapture", eglBase.getEglBaseContext());
         videoSource = peerConnectionFactory.createVideoSource(videoCapturer.isScreencast());
         videoCapturer.initialize(surfaceTextureHelper, appContext, videoSource.getCapturerObserver());
-        videoSource.adaptOutputFormat(640, 480, 15);
+        videoSource.adaptOutputFormat(320, 240, 10);
         try {
-            videoCapturer.startCapture(640, 480, 15);
+            videoCapturer.startCapture(320, 240, 10);
         } catch (Exception e) {
             Log.w(TAG, "Failed to start capture", e);
         }
@@ -485,8 +485,8 @@ public class GroupWebRtcPeerManager {
                     continue;
                 }
                 encoding.active = true;
-                encoding.maxBitrateBps = 500_000;
-                encoding.maxFramerate = 15;
+                encoding.maxBitrateBps = 250_000;
+                encoding.maxFramerate = 10;
             }
             sender.setParameters(parameters);
         } catch (Exception e) {

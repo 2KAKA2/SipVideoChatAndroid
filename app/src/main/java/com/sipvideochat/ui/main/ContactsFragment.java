@@ -65,6 +65,9 @@ public class ContactsFragment extends Fragment {
         rvContacts.setLayoutManager(new LinearLayoutManager(requireContext()));
         rvContacts.setAdapter(adapter);
         for (MainActivity.ConversationItem contact : activity.getContacts()) {
+            if (contact.section) {
+                continue;
+            }
             List<Message> history = activity.getChatHistory(contact.key);
             if (!history.isEmpty()) {
                 adapter.updateLastMessage(contact.key, MessageUiUtil.buildPreviewText(history.get(history.size() - 1)));
@@ -106,6 +109,9 @@ public class ContactsFragment extends Fragment {
         MainActivity activity = (MainActivity) requireActivity();
         List<String> knownContacts = new ArrayList<>();
         for (MainActivity.ConversationItem item : activity.getContacts()) {
+            if (item.section) {
+                continue;
+            }
             if (!item.group && item.key != null && !item.key.trim().isEmpty() && !item.key.equals(activity.getMyUsername())) {
                 knownContacts.add(item.key);
             }

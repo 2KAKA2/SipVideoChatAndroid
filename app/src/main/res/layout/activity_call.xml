@@ -93,50 +93,67 @@
 
     <LinearLayout
         android:id="@+id/layoutButtons"
-        android:layout_width="wrap_content"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="64dp"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:layout_marginBottom="32dp"
+        android:elevation="24dp"
         android:gravity="center"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnMute"
-            style="@style/Widget.Material3.Button.TonalButton"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="16dp"
-            android:enabled="false"
-            android:text="Mute" />
+            android:gravity="center"
+            android:orientation="horizontal">
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnToggleVideo"
-            style="@style/Widget.Material3.Button.TonalButton"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginEnd="16dp"
-            android:enabled="false"
-            android:text="Stop Video"
-            android:visibility="gone" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnMute"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="132dp"
+                android:layout_height="wrap_content"
+                android:enabled="false"
+                android:text="Mute" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnHangup"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:backgroundTint="@color/red"
-            android:text="Hang Up"
-            app:iconTint="@color/white" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnToggleVideo"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="132dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:enabled="false"
+                android:text="Stop Video"
+                android:visibility="gone" />
+        </LinearLayout>
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btnAccept"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:backgroundTint="@color/green"
-            android:text="Accept"
-            android:visibility="gone" />
+            android:layout_marginTop="14dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnHangup"
+                android:layout_width="132dp"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/red"
+                android:text="Hang Up"
+                app:iconTint="@color/white" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnAccept"
+                android:layout_width="132dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:backgroundTint="@color/green"
+                android:text="Accept"
+                android:visibility="gone" />
+        </LinearLayout>
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
